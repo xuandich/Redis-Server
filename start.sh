@@ -42,6 +42,32 @@ fi
 
 echo "✅ Chromium snap found"
 echo ""
+
+# Auto-load worker images from tar.gz if missing
+echo "🔍 Checking worker Docker images..."
+WORKERS_DIR="$PROJECT_ROOT/workers"
+for tar_file in "$WORKERS_DIR"/*/*.tar.gz; do
+    if [ -f "$tar_file" ]; then
+        filename=$(basename "$tar_file")
+        # Extract domain name from filename (e.g., worker-fnac-latest.tar.gz → fnac)
+        domain=$(echo "$filename" | sed 's/worker-//g' | sed 's/-latest.tar.gz//g')
+        image_name="worker-${domain}:latest"
+
+        if ! docker image inspect "$image_name" > /dev/null 2>&1; then
+            echo "📦 Image not found: $image_name"
+            echo "   Loading from: $filename..."
+            if docker load -i "$tar_file"; then
+                echo "   ✅ Loaded: $image_name"
+            else
+                echo "   ❌ Failed to load: $image_name"
+            fi
+        else
+            echo "✅ Image found: $image_name"
+        fi
+    fi
+done
+echo ""
+
 echo "📂 Project: $PROJECT_ROOT"
 echo "📁 Proxy dir: $PROXY_DIR"
 echo ""
