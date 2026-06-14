@@ -1,0 +1,57 @@
+Redis_Server/
+├── config.py                      # Central configuration (reads from .env)
+├── main.py                        # Orchestrator (RQ worker)
+├── test_job.py                    # Test client
+├── start.sh                       # Startup script (chromium check)
+├── .env                           # Configuration file (EDIT THIS)
+├── .gitignore                     # Git ignore rules
+├── docker-compose.yml             # Docker services: redis, orchestrator
+├── Dockerfile                     # Orchestrator image
+├── README.md                      # Full documentation
+│
+├── workers/
+│   ├── Proxy/
+│   │   └── buyproxies_List.xlsx   # Proxy list (shared by all workers)
+│   │
+│   └── fnac/
+│       ├── Dockerfile             # Worker image (per-domain)
+│       ├── run.py                 # Container entry point
+│       ├── sourceCode/            # Crawler logic
+│       │   ├── main.py            # process_single_request()
+│       │   ├── extractor.py       # FnacHtmlFetcher (browser)
+│       │   ├── config.py          # load_proxies_from_excel()
+│       │   ├── utils.py           # Utility functions
+│       │   ├── display_manager.py # Console UI
+│       │   ├── requirements.txt   # Dependencies
+│       │   └── pyproject.toml     # Project metadata
+│       │
+│       └── worker-fnac-latest.tar.gz  # Compressed Docker image
+│
+├── .venv/                         # Virtual environment (gitignored)
+└── result_*.json                  # Test outputs (gitignored)
+
+
+FLOW:
+-----
+test_job.py (Python)
+    ↓ enqueue RQ job
+Redis Queue
+    ↓ listen & spawn container
+main.py (Orchestrator)
+    ├── mount: /snap/chromium/current (from host)
+    ├── mount: /app/Proxy (from host)
+    └── spawn: worker-fnac container
+        ├── run.py (entry point)
+        ├── sourceCode/main.py
+        ├── sourceCode/extractor.py
+        └── result → Redis
+
+CONFIG HIERARCHY:
+-----------------
+.env              (user-editable, docker-compose loads)
+    ↓
+REDIS_HOST, REDIS_PORT, etc. (env vars in container)
+    ↓
+config.py         (Python code reads os.environ.get())
+    ↓
+main.py, run.py   (use config values)

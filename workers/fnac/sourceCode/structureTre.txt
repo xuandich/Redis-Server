@@ -1,0 +1,7 @@
+fnac_extractor/
+├── main.py
+├── config.py
+├── display_manager.py
+├── extractor.py
+├── utils.py
+└── models.py
