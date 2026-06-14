@@ -14,7 +14,7 @@ import sys
 from rq import Queue
 from config import REDIS_HOST, REDIS_PORT, QUEUE_FNAC, QUEUE_AMAZON
 
-TEST_URL = 'https://www.fnac.com/Samsung-Galaxy-S24-FE-5G-128-Go-Graphite-Smartphone/a21315069/w-4'
+TEST_URL = 'https://www.fnac.com/Kit-creatif-avec-Gouache-Lefranc-Bourgeois-Toiles-de-Maitres/a17346494/w-4'
 
 url = sys.argv[1] if len(sys.argv) > 1 else TEST_URL
 domain = sys.argv[2] if len(sys.argv) > 2 else 'fnac'
@@ -25,7 +25,7 @@ ret_key = str(uuid.uuid4())
 queue_map = {'fnac': QUEUE_FNAC, 'amazon': QUEUE_AMAZON}
 queue_name = queue_map.get(domain, QUEUE_FNAC)
 
-conn = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+conn = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
 q = Queue(queue_name, connection=conn)
 
 print(f"URL       : {url}")
@@ -49,7 +49,12 @@ print("Waiting for result", end='', flush=True)
 
 start = time.time()
 while time.time() - start < 180:
-    job.refresh()
+    try:
+        job.refresh()
+    except Exception as e:
+        # Ignore connection errors during refresh
+        pass
+
     if job.is_finished:
         result = job.result
         output_file = f"result_{ret_key[:8]}.json"
