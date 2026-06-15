@@ -16,7 +16,18 @@ import redis as redis_lib
 
 from config import REDIS_HOST, REDIS_PORT, get_max_concurrent
 
-redis_client = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+redis_client = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
+
+
+class ThreadSafeWorker(Worker):
+    """Worker safe for spawned threads - skips signal handlers"""
+    def _install_signal_handlers(self):
+        """Skip signal installation - safe for threads"""
+        pass
+
+    def monitor_work_horse(self, _job, _queue):
+        """Skip death penalty monitoring - safe for threads"""
+        pass
 
 
 def discover_worker_domains():
@@ -50,7 +61,7 @@ def start_worker_for_domain(domain):
 
     max_concurrent = get_max_concurrent(domain)
 
-    worker = Worker(
+    worker = ThreadSafeWorker(
         [queue],
         connection=redis_client,
         name=f'worker-{domain}',
@@ -65,6 +76,18 @@ def start_worker_for_domain(domain):
     worker.work()
 
 
+def cleanup_stale_workers(domains):
+    """Remove stale worker registrations from previous crashes"""
+    for domain in domains:
+        worker_key = f'rq:worker:worker-{domain}'
+        try:
+            if redis_client.exists(worker_key):
+                redis_client.delete(worker_key)
+                print(f"[Cleanup] Removed stale worker: worker-{domain}")
+        except Exception:
+            pass
+
+
 def start_orchestrator():
     """Auto-discover domains and start worker threads for each"""
     domains = discover_worker_domains()
@@ -77,6 +100,9 @@ def start_orchestrator():
     if not domains:
         print("[Warning] No worker domains found in workers/")
         return
+
+    # Clean up stale workers from previous crashes
+    cleanup_stale_workers(domains)
 
     # Start worker thread for each domain
     threads = []

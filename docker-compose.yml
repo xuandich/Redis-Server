@@ -24,6 +24,7 @@ services:
       - crawler-net
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./workers:/app/workers
     environment:
       REDIS_HOST: ${REDIS_HOST}
       REDIS_PORT: ${REDIS_PORT}

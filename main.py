@@ -1,7 +1,7 @@
 import docker
 import redis as redis_lib
 import json
-from threading import Semaphore
+import time
 
 from config import (
     REDIS_HOST, REDIS_PORT, CRAWLER_NETWORK, PROXY_HOST_DIR,
@@ -13,46 +13,81 @@ from config import (
 redis_client = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 docker_client = docker.from_env()
 
-# Global semaphore (limit total concurrent jobs across all domains)
-_global_semaphore = Semaphore(MAX_CONCURRENT_TOTAL)
 
-# Per-domain semaphores (limit concurrent jobs per domain)
-_domain_semaphores = {}
+_LUA_ACQUIRE = """
+local key = KEYS[1]
+local max_slots = tonumber(ARGV[1])
+local current = tonumber(redis.call('GET', key) or 0)
+if current < max_slots then
+    redis.call('INCR', key)
+    redis.call('EXPIRE', key, 3600)
+    return 1
+end
+return 0
+"""
 
 
-def _get_semaphore_for_domain(domain: str) -> Semaphore:
-    """Get or create semaphore for domain concurrency control"""
-    if domain not in _domain_semaphores:
-        max_concurrent = get_max_concurrent(domain)
-        _domain_semaphores[domain] = Semaphore(max_concurrent)
-        print(f"[{domain}] Semaphore created (max_concurrent={max_concurrent})")
-    return _domain_semaphores[domain]
+def _acquire_slot(slot_type: str, key: str, max_slots: int, timeout: int = 300) -> bool:
+    """Acquire a slot using Lua script (atomic, works across processes)"""
+    redis_key = f"slots:{slot_type}:{key}"
+    start_time = time.time()
+
+    # Lazy register script (ensures Redis is ready)
+    lua_acquire = redis_client.register_script(_LUA_ACQUIRE)
+
+    while time.time() - start_time < timeout:
+        try:
+            if lua_acquire(keys=[redis_key], args=[max_slots]):
+                return True
+        except Exception as e:
+            print(f"[ERROR] Slot acquire failed: {e}", flush=True)
+            return False
+        time.sleep(0.05)  # Poll every 50ms
+
+    return False
+
+
+def _release_slot(slot_type: str, key: str):
+    """Release a slot using Redis"""
+    redis_key = f"slots:{slot_type}:{key}"
+    redis_client.decr(redis_key)
 
 
 def crawl_job(url: str, domain: str, ret_key: str, proxy_type: str = 'standard') -> dict:
-    """Crawl job with dual concurrency limits:
+    """Crawl job with dual concurrency limits (Redis-based):
     - Global: max total containers across all domains
     - Per-domain: max containers per domain
     """
     job_id = ret_key[:8]
 
-    # 1. Wait for global slot (all domains combined)
-    print(f"[{domain}] Job {job_id} waiting for global slot...")
-    _global_semaphore.acquire()
+    # 1. Wait for global slot
+    max_total = MAX_CONCURRENT_TOTAL
+    print(f"[CRAWL_JOB] {domain} {job_id} - START, waiting for global slot (max {max_total})...", flush=True)
+    if not _acquire_slot('global', 'total', max_total):
+        print(f"[CRAWL_JOB] {domain} {job_id} - GLOBAL TIMEOUT", flush=True)
+        return {'status': 'failed', 'error': 'Global slot timeout', 'ret_key': ret_key, 'domain': domain}
+
     try:
         # 2. Wait for domain-specific slot
-        domain_semaphore = _get_semaphore_for_domain(domain)
-        print(f"[{domain}] Job {job_id} waiting for domain slot...")
-        domain_semaphore.acquire()
+        max_domain = get_max_concurrent(domain)
+        print(f"[CRAWL_JOB] {domain} {job_id} - waiting for domain slot (max {max_domain})...", flush=True)
+        if not _acquire_slot('domain', domain, max_domain):
+            print(f"[CRAWL_JOB] {domain} {job_id} - DOMAIN TIMEOUT", flush=True)
+            return {'status': 'failed', 'error': 'Domain slot timeout', 'ret_key': ret_key, 'domain': domain}
+
         try:
-            print(f"[{domain}] Job {job_id} acquired both slots, spawning container...")
-            return _spawn_and_wait_container(url, domain, ret_key, proxy_type)
+            print(f"[CRAWL_JOB] {domain} {job_id} - ACQUIRED SLOTS, spawning container...", flush=True)
+            result = _spawn_and_wait_container(url, domain, ret_key, proxy_type)
+            # Write result to Redis (for test_batch.py polling)
+            redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(result, ensure_ascii=False, default=str))
+            print(f"[CRAWL_JOB] {domain} {job_id} - CONTAINER DONE", flush=True)
+            return result
         finally:
-            domain_semaphore.release()
-            print(f"[{domain}] Job {job_id} released domain slot")
+            _release_slot('domain', domain)
+            print(f"[CRAWL_JOB] {domain} {job_id} - released domain slot", flush=True)
     finally:
-        _global_semaphore.release()
-        print(f"[{domain}] Job {job_id} released global slot")
+        _release_slot('global', 'total')
+        print(f"[CRAWL_JOB] {domain} {job_id} - released global slot", flush=True)
 
 
 def _spawn_and_wait_container(url: str, domain: str, ret_key: str, proxy_type: str) -> dict:

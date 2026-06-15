@@ -21,8 +21,24 @@ async def main():
 
     r = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
 
-    request = {'url': url, 'ret_key': ret_key, 'proxy_type': proxy_type}
-    result = await process_single_request(request, asyncio.Semaphore(1))
+    try:
+        request = {'url': url, 'ret_key': ret_key, 'proxy_type': proxy_type}
+        result = await process_single_request(request, asyncio.Semaphore(1))
+    except Exception as e:
+        result = {
+            'url': url,
+            'ret_key': ret_key,
+            'status': 'failed',
+            'error': f'Worker exception: {str(e)}',
+            'http_code': None,
+            'html': '',
+            'headers': {},
+            'cookies': {},
+            'elapsed_ms': 0,
+            'proxy_type': proxy_type,
+            'total_elapsed_seconds': 0,
+        }
+        print(f"[FNAC] Exception: {e}")
 
     print(f"[FNAC] status={result.get('status')} http={result.get('http_code')} error={result.get('error')} html_len={len(result.get('html') or '')}")
     r.setex(f"result:{ret_key}", result_ttl, json.dumps(result, ensure_ascii=False, default=str))
