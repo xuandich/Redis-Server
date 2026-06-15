@@ -122,16 +122,6 @@ docker build -t worker-fnac:latest .
 ```bash
 docker ps  # Verify redis-server running
 ```
-
-## 📖 Chi Tiết Hơn
-
-Xem file **Mo_Ta.txt** để biết thêm chi tiết về:
-- Architecture
-- Job workflow
-- Proxy rotation
-- Concurrency control
-- Timeout handling
-
 ## 📝 License
 
 MIT
