@@ -65,7 +65,9 @@ def crawl_job(url: str, domain: str, ret_key: str, proxy_type: str = 'standard')
     print(f"[CRAWL_JOB] {domain} {job_id} - START, waiting for global slot (max {max_total})...", flush=True)
     if not _acquire_slot('global', 'total', max_total):
         print(f"[CRAWL_JOB] {domain} {job_id} - GLOBAL TIMEOUT", flush=True)
-        return {'status': 'failed', 'error': 'Global slot timeout', 'ret_key': ret_key, 'domain': domain}
+        error_result = {'status': 'failed', 'error': 'Global slot timeout', 'ret_key': ret_key, 'domain': domain}
+        redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
+        return error_result
 
     try:
         # 2. Wait for domain-specific slot
@@ -73,7 +75,9 @@ def crawl_job(url: str, domain: str, ret_key: str, proxy_type: str = 'standard')
         print(f"[CRAWL_JOB] {domain} {job_id} - waiting for domain slot (max {max_domain})...", flush=True)
         if not _acquire_slot('domain', domain, max_domain):
             print(f"[CRAWL_JOB] {domain} {job_id} - DOMAIN TIMEOUT", flush=True)
-            return {'status': 'failed', 'error': 'Domain slot timeout', 'ret_key': ret_key, 'domain': domain}
+            error_result = {'status': 'failed', 'error': 'Domain slot timeout', 'ret_key': ret_key, 'domain': domain}
+            redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
+            return error_result
 
         try:
             print(f"[CRAWL_JOB] {domain} {job_id} - ACQUIRED SLOTS, spawning container...", flush=True)
@@ -129,13 +133,15 @@ def _spawn_and_wait_container(url: str, domain: str, ret_key: str, proxy_type: s
             print(f"[{domain}] Container killed")
         except:
             pass
-        return {
+        error_result = {
             'url': url,
             'ret_key': ret_key,
             'domain': domain,
             'error': f'Container timeout/error: {str(e)}',
             'status': 'failed'
         }
+        redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
+        return error_result
 
     # Fetch result from Redis
     result = redis_client.get(f"result:{ret_key}")
@@ -145,10 +151,12 @@ def _spawn_and_wait_container(url: str, domain: str, ret_key: str, proxy_type: s
     # No result returned by container
     error_msg = 'No result from container (timeout or crash)'
     print(f"[{domain}] {error_msg}")
-    return {
+    error_result = {
         'url': url,
         'ret_key': ret_key,
         'domain': domain,
         'error': error_msg,
         'status': 'failed'
     }
+    redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
+    return error_result

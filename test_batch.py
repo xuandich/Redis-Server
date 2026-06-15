@@ -74,13 +74,16 @@ for i, url in enumerate(selected_urls, 1):
     ret_keys.append(ret_key)
 
     try:
+        # Job timeout = 30 seconds per request (accounts for queue wait + execution)
+        job_timeout = num_requests * 30
+
         job = q.enqueue(
             'main.crawl_job',
             url=url,
             domain=domain,
             ret_key=ret_key,
             proxy_type=proxy_type,
-            job_timeout=180,
+            job_timeout=job_timeout,
         )
         jobs.append((job.id, ret_key, url))
 
