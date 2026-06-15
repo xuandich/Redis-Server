@@ -17,6 +17,7 @@ wheels/
 
 # Test outputs
 result_*.json
+batch_results_*.json
 
 # Docker images (compressed)
 *.tar.gz
@@ -33,6 +34,7 @@ result_*.json
 Thumbs.db
 
 # Project-specific
+TEST_FILE/
 output/
 logs/
 
