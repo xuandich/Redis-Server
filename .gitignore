@@ -1,0 +1,46 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+*.pyc
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.venv/
+
+# Environment & Secrets
+.env
+.env.local
+
+# Test outputs
+result_*.json
+batch_results_*.json
+
+# Docker images (compressed)
+*.tar.gz
+*.tar
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+TEST_FILE/
+output/
+logs/
+
+# Sensitive data
+workers/Proxy/
+!workers/Proxy/.gitkeep
+
+# Documentation
+Mo_Ta.txt

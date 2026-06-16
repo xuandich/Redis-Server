@@ -1,0 +1,15 @@
+# Browser automation
+playwright>=1.40.0
+
+# Redis client
+redis>=4.0.0
+
+# Data processing
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# System monitoring
+psutil>=5.9.0
+
+# Rich console UI
+rich>=13.7.0

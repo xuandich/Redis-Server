@@ -1,0 +1,38 @@
+version: '3.8'
+
+networks:
+  crawler-net:
+    name: crawler-net
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis-server
+    networks:
+      - crawler-net
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  orchestrator:
+    build: .
+    container_name: orchestrator
+    networks:
+      - crawler-net
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./workers:/app/workers
+    environment:
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      CRAWLER_NETWORK: ${CRAWLER_NETWORK}
+      PROXY_HOST_DIR: ${PROXY_HOST_DIR}
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+volumes:
+  redis-data:
