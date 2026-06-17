@@ -49,7 +49,7 @@ else:
     print(f"🎲 Randomly selecting {num_requests} URLs from {len(all_urls)}")
     selected_urls = random.sample(all_urls, num_requests)
 
-# Connect to Redis
+# Connect to Redis (decode_responses=False — consistent with test_job.py and RQ)
 queue_map = {'fnac': QUEUE_FNAC, 'amazon': QUEUE_AMAZON}
 queue_name = queue_map.get(domain, QUEUE_FNAC)
 conn = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
@@ -63,7 +63,7 @@ print(f"  Requests: {num_requests}")
 print(f"\n⏱️  Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print("=" * 70)
 
-# Send jobs
+# Send jobs — enqueue individually like test_job.py (no manual job_state)
 jobs = []
 ret_keys = []
 start_time = time.time()
@@ -74,8 +74,7 @@ for i, url in enumerate(selected_urls, 1):
     ret_keys.append(ret_key)
 
     try:
-        # Job timeout = 30 seconds per request (accounts for queue wait + execution)
-        job_timeout = num_requests * 30
+        job_timeout = num_requests * 30  # 30s per request
 
         job = q.enqueue(
             'main.crawl_job',
@@ -85,16 +84,6 @@ for i, url in enumerate(selected_urls, 1):
             proxy_type=proxy_type,
             job_timeout=job_timeout,
         )
-
-        # Set queued state in Redis for dashboard
-        job_state = {
-            'ret_key': ret_key,
-            'state': 'queued',
-            'url': url,
-            'domain': domain,
-            'timestamp': time.time()
-        }
-        conn.setex(f"job_state:{ret_key}", 3600, json.dumps(job_state))
 
         jobs.append((job.id, ret_key, url))
 
@@ -134,7 +123,7 @@ while time.time() - poll_start < timeout:
         try:
             value = conn.get(f'result:{ret_key}')
             if value:
-                result = json.loads(value.decode('utf-8', errors='replace'))
+                result = json.loads(value)
                 results[ret_key] = result
 
                 status = result.get('status', 'unknown')

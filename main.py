@@ -51,13 +51,14 @@ def _release_slot(slot_type: str, key: str):
         redis_client.set(redis_key, 0)
 
 
-def _set_job_state(ret_key: str, state: str, url: str, domain: str, ttl: int = 3600):
+def _set_job_state(ret_key: str, state: str, url: str, domain: str, proxy_type: str = 'standard', ttl: int = 3600):
     """Set job state for dashboard tracking"""
     redis_client.setex(f"job_state:{ret_key}", ttl, json.dumps({
         'ret_key': ret_key,
         'state': state,
         'url': url,
         'domain': domain,
+        'proxy_type': proxy_type,
         'timestamp': time.time()
     }, ensure_ascii=False, default=str))
 
@@ -69,6 +70,13 @@ def _clear_job_state(ret_key: str):
 def crawl_job(url: str, domain: str, ret_key: str, proxy_type: str = 'standard') -> dict:
     job_id = ret_key[:8]
 
+    # Save request metadata immediately (for recovery if crash before finish)
+    redis_client.hset(f"req_meta:{ret_key}", mapping={'url': url, 'domain': domain, 'proxy_type': proxy_type})
+    redis_client.expire(f"req_meta:{ret_key}", 86400)
+
+    # Mark as queued immediately (before slot wait, so dashboard shows pending jobs)
+    _set_job_state(ret_key, 'queued', url, domain, proxy_type)
+
     print(f"[CRAWL_JOB] {domain} {job_id} - START, waiting for global slot (max {MAX_CONCURRENT_TOTAL})...", flush=True)
     if not _acquire_slot('global', 'total', MAX_CONCURRENT_TOTAL):
         print(f"[CRAWL_JOB] {domain} {job_id} - GLOBAL TIMEOUT", flush=True)
@@ -77,7 +85,7 @@ def crawl_job(url: str, domain: str, ret_key: str, proxy_type: str = 'standard')
         _clear_job_state(ret_key)
         return error_result
 
-    _set_job_state(ret_key, 'started', url, domain)
+    _set_job_state(ret_key, 'started', url, domain, proxy_type)
 
     try:
         max_domain = get_max_concurrent(domain)
@@ -89,7 +97,7 @@ def crawl_job(url: str, domain: str, ret_key: str, proxy_type: str = 'standard')
             _clear_job_state(ret_key)
             return error_result
 
-        _set_job_state(ret_key, 'running', url, domain)
+        _set_job_state(ret_key, 'running', url, domain, proxy_type)
 
         try:
             print(f"[CRAWL_JOB] {domain} {job_id} - ACQUIRED SLOTS, spawning container...", flush=True)

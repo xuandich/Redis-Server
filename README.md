@@ -28,17 +28,21 @@ playwright install chromium
 Hệ thống sẽ tự động:
 - ✅ Khởi động Redis container
 - ✅ Khởi động Orchestrator (auto-discover domains)
-- ✅ Khởi động RQ Dashboard (http://localhost:9181)
+- ✅ Khởi động Dashboard (http://localhost:5000)
 
 ### 3. Gửi Request
 
 ```bash
-python test_job.py "https://www.fnac.com/product" "fnac"
+# Single request
+uv run python test_job.py "https://www.fnac.com/product" "fnac"
+
+# Batch (100 URLs từ Excel)
+uv run python test_batch.py 100 fnac
 ```
 
 ### 4. Monitor Jobs
 
-Mở trình duyệt: **http://localhost:9181**
+Mở trình duyệt: **http://localhost:5000**
 
 ## 📋 Yêu Cầu Hệ Thống
 

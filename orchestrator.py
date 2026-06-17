@@ -18,8 +18,6 @@ from config import REDIS_HOST, REDIS_PORT, get_max_concurrent
 
 redis_client = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
 
-MAX_CONCURRENT_TOTAL = 10  # Global slot limit
-
 
 class ThreadSafeWorker(Worker):
     """Worker safe for spawned threads - skips signal handlers
@@ -81,6 +79,62 @@ def start_worker_for_domain(domain):
     worker.work()
 
 
+def _retry_stale_jobs():
+    """Re-enqueue in-flight jobs lost during crash.
+
+    Logic:
+    - req_meta:{ret_key} is written at the start of crawl_job() = job was picked by RQ
+    - If req_meta exists but result:{ret_key} doesn't = job was interrupted → re-enqueue
+    - Queued jobs (never picked) still live in RQ queue (docker compose stop preserves Redis AOF)
+    - Also delete all stale job_state:* keys (ghost entries from previous session)
+    """
+    import json
+
+    # Delete all stale job_state keys (avoid ghost entries in dashboard)
+    cursor = 0
+    while True:
+        cursor, keys = redis_client.scan(cursor, match=b'job_state:*', count=100)
+        for key in keys:
+            redis_client.delete(key)
+        if cursor == 0:
+            break
+
+    # Re-enqueue in-flight jobs: req_meta exists but no result
+    retried = 0
+    cursor = 0
+    while True:
+        cursor, keys = redis_client.scan(cursor, match=b'req_meta:*', count=100)
+        for key in keys:
+            try:
+                ret_key = key.decode().replace('req_meta:', '')
+
+                # Already finished — clean up
+                if redis_client.exists(f'result:{ret_key}'):
+                    redis_client.delete(key)
+                    continue
+
+                metadata = redis_client.hgetall(key)
+                url = metadata.get(b'url', b'').decode()
+                domain = metadata.get(b'domain', b'').decode()
+                proxy_type = metadata.get(b'proxy_type', b'standard').decode()
+
+                if url and domain:
+                    import main as crawler_main
+                    q = Queue(f'crawler:{domain}', connection=redis_client)
+                    q.enqueue(crawler_main.crawl_job, url, domain, ret_key, proxy_type, job_timeout=600)
+                    retried += 1
+                    print(f"[Retry] Re-enqueued {ret_key[:8]} ({domain}): {url[:70]}")
+
+                redis_client.delete(key)
+            except Exception as e:
+                print(f"[Retry] Error processing {key}: {e}")
+        if cursor == 0:
+            break
+
+    if retried:
+        print(f"[Retry] Re-enqueued {retried} in-flight jobs")
+
+
 def cleanup_stale_workers(domains):
     """Remove stale worker registrations and slot counters from previous crashes"""
     for domain in domains:
@@ -101,6 +155,9 @@ def cleanup_stale_workers(domains):
             print(f"[Cleanup] Reset slot: {key.decode()}")
         if cursor == 0:
             break
+
+    # Re-enqueue stale started/running jobs — they were dequeued by RQ before crash, lost from queue
+    _retry_stale_jobs()
 
 
 def start_orchestrator():

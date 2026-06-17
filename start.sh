@@ -5,9 +5,9 @@
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROXY_DIR="${PROJECT_ROOT}/workers/Proxy"
 
-# Auto-cleanup old containers before starting
-echo "🛑 Cleaning up old containers..."
-docker compose down > /dev/null 2>&1 && echo "   ✅ Cleaned up" || echo "   ⓘ No old containers"
+# Stop old containers (preserve Redis data)
+echo "🛑 Stopping old containers..."
+docker compose stop > /dev/null 2>&1 && echo "   ✅ Stopped" || echo "   ⓘ No old containers"
 
 # Load .env for REDIS_PORT
 if [ -f "$PROJECT_ROOT/.env" ]; then

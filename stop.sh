@@ -4,8 +4,8 @@
 echo "🛑 Stopping services..."
 echo ""
 
-# Stop Docker containers (including Redis, Orchestrator, Dashboard)
-if docker compose down; then
+# Stop Docker containers gracefully (preserve Redis data)
+if docker compose stop; then
     echo "  ✅ Redis stopped"
     echo "  ✅ Orchestrator stopped"
     echo "  ✅ Dashboard stopped"
