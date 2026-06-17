@@ -82,7 +82,7 @@ def start_worker_for_domain(domain):
 
 
 def cleanup_stale_workers(domains):
-    """Remove stale worker registrations from previous crashes"""
+    """Remove stale worker registrations and slot counters from previous crashes"""
     for domain in domains:
         worker_key = f'rq:worker:worker-{domain}'
         try:
@@ -91,6 +91,16 @@ def cleanup_stale_workers(domains):
                 print(f"[Cleanup] Removed stale worker: worker-{domain}")
         except Exception:
             pass
+
+    # Reset slot counters — any leftover slots are stale after restart
+    cursor = 0
+    while True:
+        cursor, keys = redis_client.scan(cursor, match=b'slots:*', count=100)
+        for key in keys:
+            redis_client.set(key, 0)
+            print(f"[Cleanup] Reset slot: {key.decode()}")
+        if cursor == 0:
+            break
 
 
 def start_orchestrator():
