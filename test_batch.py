@@ -85,6 +85,17 @@ for i, url in enumerate(selected_urls, 1):
             proxy_type=proxy_type,
             job_timeout=job_timeout,
         )
+
+        # Set queued state in Redis for dashboard
+        job_state = {
+            'ret_key': ret_key,
+            'state': 'queued',
+            'url': url,
+            'domain': domain,
+            'timestamp': time.time()
+        }
+        conn.setex(f"job_state:{ret_key}", 3600, json.dumps(job_state))
+
         jobs.append((job.id, ret_key, url))
 
         if i % 10 == 0:

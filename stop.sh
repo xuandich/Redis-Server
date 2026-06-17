@@ -1,13 +1,18 @@
 #!/bin/bash
-# Stop Redis, Orchestrator, and RQ Dashboard
+# Stop all services (Redis, Orchestrator, Dashboard)
 
 echo "🛑 Stopping services..."
+echo ""
 
-# Kill RQ Dashboard
-pkill -f "rq_dashboard" 2>/dev/null && echo "  ✅ Dashboard stopped" || echo "  ⓘ Dashboard not running"
-
-# Stop Docker containers
-docker compose down > /dev/null 2>&1 && echo "  ✅ Containers stopped" || echo "  ⓘ Docker not running"
+# Stop Docker containers (including Redis, Orchestrator, Dashboard)
+if docker compose down; then
+    echo "  ✅ Redis stopped"
+    echo "  ✅ Orchestrator stopped"
+    echo "  ✅ Dashboard stopped"
+    echo "  ✅ Networks cleaned up"
+else
+    echo "  ⓘ Docker services not running"
+fi
 
 echo ""
-echo "✅ All services stopped"
+echo "✅ All services stopped successfully"

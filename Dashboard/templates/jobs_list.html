@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="pageTitle">Jobs - Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <style>
+        body { background: #f1f5f9; font-family: 'Segoe UI', sans-serif; }
+        .navbar-custom { background: linear-gradient(135deg, #0f172a, #1e293b); padding: 0.75rem 0; position: sticky; top: 0; z-index: 1000; }
+        .navbar-custom .navbar-brand { color: white; font-weight: 600; }
+        .navbar-custom .nav-link { color: rgba(255,255,255,0.7); }
+        .navbar-custom .nav-link:hover { color: white; }
+        .state-badge { font-size: 0.75rem; padding: 0.25rem 0.6rem; border-radius: 20px; }
+        .state-queued { background: #fef3c7; color: #d97706; }
+        .state-started { background: #cffafe; color: #0891b2; }
+        .state-running { background: #dbeafe; color: #2563eb; }
+        .state-finished { background: #d1fae5; color: #059669; }
+        .state-failed { background: #fee2e2; color: #dc2626; }
+        .job-card {
+            background: white;
+            border-radius: 8px;
+            padding: 0.875rem 1rem;
+            margin-bottom: 0.5rem;
+            border-left: 4px solid #e2e8f0;
+            transition: all 0.15s;
+            cursor: pointer;
+            text-decoration: none;
+            display: block;
+            color: inherit;
+        }
+        .job-card:hover { transform: translateX(2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); color: inherit; }
+        .job-card.queued { border-left-color: #eab308; }
+        .job-card.started { border-left-color: #0891b2; }
+        .job-card.running { border-left-color: #3b82f6; }
+        .job-card.finished { border-left-color: #22c55e; }
+        .job-card.failed { border-left-color: #ef4444; }
+        .job-id { font-family: monospace; font-size: 0.65rem; color: #94a3b8; }
+        .job-url { font-size: 0.875rem; color: #1e293b; margin: 0.2rem 0; word-break: break-all; }
+        .job-meta { font-size: 0.7rem; color: #64748b; display: flex; gap: 1rem; flex-wrap: wrap; }
+        .job-error { font-size: 0.75rem; color: #dc2626; background: #fee2e2; padding: 0.15rem 0.5rem; border-radius: 4px; margin-top: 0.25rem; display: inline-block; }
+        .pagination-bar { display: flex; justify-content: center; align-items: center; gap: 0.5rem; margin: 1.5rem 0; }
+        .page-btn { padding: 0.4rem 0.75rem; border-radius: 6px; border: 1px solid #e2e8f0; background: white; cursor: pointer; font-size: 0.875rem; }
+        .page-btn:hover { background: #f1f5f9; }
+        .page-btn.active { background: #4a6cf7; color: white; border-color: #4a6cf7; }
+        .page-btn:disabled { opacity: 0.4; cursor: default; }
+        .header-card { background: white; border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: space-between; }
+        .empty-state { text-align: center; padding: 4rem; color: #94a3b8; }
+        .empty-state i { font-size: 3rem; display: block; margin-bottom: 1rem; opacity: 0.3; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-custom">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-speedometer2 me-2"></i>Job Queue Dashboard
+            </a>
+            <span class="nav-link" id="stateLabel"></span>
+        </div>
+    </nav>
+
+    <div class="container py-3">
+        <div class="header-card">
+            <div>
+                <h5 class="mb-0" id="headerTitle">Loading...</h5>
+                <small class="text-muted" id="headerSub"></small>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <button class="btn btn-sm btn-outline-secondary" onclick="loadPage(currentPage)">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+        </div>
+
+        <div id="jobsContainer">
+            <div class="empty-state"><i class="bi bi-hourglass-split"></i><p>Loading...</p></div>
+        </div>
+
+        <div class="pagination-bar" id="paginationBar"></div>
+    </div>
+
+    <script>
+        const state = '{{ state }}';
+        let currentPage = 1;
+        let totalPages = 1;
+
+        const stateConfig = {
+            queued:   { label: 'Queued',    icon: 'bi-clock-history',    color: '#d97706' },
+            started:  { label: 'Started',   icon: 'bi-hourglass-split',  color: '#0891b2' },
+            running:  { label: 'Running',   icon: 'bi-play-circle',      color: '#2563eb' },
+            finished: { label: 'Completed', icon: 'bi-check-circle',     color: '#059669' },
+            failed:   { label: 'Failed',    icon: 'bi-x-circle',         color: '#dc2626' },
+        };
+
+        const cfg = stateConfig[state] || { label: state, icon: 'bi-list', color: '#64748b' };
+
+        document.title = `${cfg.label} Jobs - Dashboard`;
+        document.getElementById('stateLabel').innerHTML = `<span class="state-badge state-${state}">${cfg.label}</span>`;
+
+        async function loadPage(page) {
+            currentPage = page;
+            try {
+                const res = await fetch(`/api/jobs/${state}?page=${page}`);
+                const data = await res.json();
+                totalPages = data.total_pages || 1;
+
+                document.getElementById('headerTitle').innerHTML =
+                    `<i class="bi ${cfg.icon} me-2" style="color:${cfg.color}"></i>${cfg.label} Jobs`;
+                document.getElementById('headerSub').textContent =
+                    `${data.total} jobs total — Page ${data.page} of ${data.total_pages}`;
+
+                renderJobs(data.jobs);
+                renderPagination(data.page, data.total_pages);
+            } catch (e) {
+                document.getElementById('jobsContainer').innerHTML =
+                    `<div class="alert alert-danger">Error loading jobs: ${e.message}</div>`;
+            }
+        }
+
+        function renderJobs(jobs) {
+            const container = document.getElementById('jobsContainer');
+            if (!jobs || jobs.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <i class="bi bi-inbox"></i>
+                        <p>No ${state} jobs</p>
+                    </div>`;
+                return;
+            }
+
+            container.innerHTML = jobs.map(job => {
+                const retKeyShort = (job.ret_key || '').substring(0, 8);
+                let meta = ``;
+                if (job.http_code) meta += `<span><i class="bi bi-globe"></i> HTTP ${job.http_code}</span>`;
+                if (job.total_elapsed_seconds) meta += `<span><i class="bi bi-stopwatch"></i> ${Number(job.total_elapsed_seconds).toFixed(2)}s</span>`;
+                if (job.html_size) meta += `<span><i class="bi bi-file-earmark"></i> ${(job.html_size/1024).toFixed(1)}KB</span>`;
+
+                let errorHtml = '';
+                if (job.error) {
+                    const msg = job.error.length > 100 ? job.error.substring(0, 100) + '...' : job.error;
+                    errorHtml = `<div class="job-error"><i class="bi bi-exclamation-triangle"></i> ${msg}</div>`;
+                }
+
+                return `
+                    <a href="/job/${job.ret_key}" class="job-card ${state}">
+                        <div class="job-id">#${retKeyShort}</div>
+                        <div class="job-url">${job.url || 'N/A'}</div>
+                        <div class="job-meta">${meta}</div>
+                        ${errorHtml}
+                    </a>`;
+            }).join('');
+        }
+
+        function renderPagination(page, total) {
+            const bar = document.getElementById('paginationBar');
+            if (total <= 1) { bar.innerHTML = ''; return; }
+
+            let html = `<button class="page-btn" onclick="loadPage(${page-1})" ${page<=1?'disabled':''}>
+                            <i class="bi bi-chevron-left"></i>
+                        </button>`;
+
+            const range = 2;
+            for (let i = 1; i <= total; i++) {
+                if (i === 1 || i === total || (i >= page - range && i <= page + range)) {
+                    html += `<button class="page-btn ${i===page?'active':''}" onclick="loadPage(${i})">${i}</button>`;
+                } else if (i === page - range - 1 || i === page + range + 1) {
+                    html += `<span style="color:#94a3b8">…</span>`;
+                }
+            }
+
+            html += `<button class="page-btn" onclick="loadPage(${page+1})" ${page>=total?'disabled':''}>
+                         <i class="bi bi-chevron-right"></i>
+                     </button>`;
+            bar.innerHTML = html;
+        }
+
+        loadPage(1);
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

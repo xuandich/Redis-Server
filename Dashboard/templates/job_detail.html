@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Detail - Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <style>
+        body { background: #f1f5f9; font-family: 'Segoe UI', sans-serif; }
+        .navbar-custom { background: linear-gradient(135deg, #0f172a, #1e293b); padding: 0.75rem 0; position: sticky; top: 0; z-index: 1000; }
+        .navbar-custom .navbar-brand { color: white; font-weight: 600; }
+        .card-section { background: white; border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .field-row { display: flex; padding: 0.5rem 0; border-bottom: 1px solid #f1f5f9; }
+        .field-row:last-child { border-bottom: none; }
+        .field-label { width: 180px; flex-shrink: 0; font-weight: 500; color: #64748b; font-size: 0.875rem; }
+        .field-value { flex: 1; font-size: 0.875rem; color: #1e293b; word-break: break-all; }
+        .status-badge { display: inline-block; padding: 0.2rem 0.75rem; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
+        .status-success { background: #d1fae5; color: #059669; }
+        .status-failed  { background: #fee2e2; color: #dc2626; }
+        .html-content { background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 8px; font-family: monospace; font-size: 0.75rem; max-height: 500px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+        .json-raw { background: #f8fafc; border: 1px solid #e2e8f0; padding: 1rem; border-radius: 8px; font-family: monospace; font-size: 0.75rem; max-height: 400px; overflow-y: auto; white-space: pre-wrap; }
+        .copy-btn { font-size: 0.75rem; padding: 0.25rem 0.6rem; }
+        .section-title { font-weight: 600; font-size: 1rem; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-custom">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-speedometer2 me-2"></i>Job Queue Dashboard
+            </a>
+            <span class="text-white-50" style="font-size:0.8rem;" id="retKeyDisplay"></span>
+        </div>
+    </nav>
+
+    <div class="container py-3" id="content">
+        <div class="text-center py-5 text-muted">
+            <div class="spinner-border spinner-border-sm me-2"></div>Loading...
+        </div>
+    </div>
+
+    <script>
+        const retKey = '{{ ret_key }}';
+        document.getElementById('retKeyDisplay').textContent = '#' + retKey.substring(0, 8);
+
+        async function loadDetail() {
+            try {
+                const res = await fetch(`/api/job_detail/${retKey}`);
+                if (res.status === 404) {
+                    document.getElementById('content').innerHTML = `
+                        <div class="card-section text-center py-5">
+                            <i class="bi bi-search" style="font-size:2rem;color:#94a3b8;"></i>
+                            <p class="text-muted mt-2">Job not found (may have expired)</p>
+                        </div>`;
+                    return;
+                }
+                const {source, data} = await res.json();
+                renderDetail(source, data);
+            } catch (e) {
+                document.getElementById('content').innerHTML =
+                    `<div class="alert alert-danger">Error: ${e.message}</div>`;
+            }
+        }
+
+        function renderDetail(source, data) {
+            const status = data.status || 'unknown';
+            const isSuccess = status === 'success';
+            const statusBadge = `<span class="status-badge ${isSuccess ? 'status-success' : 'status-failed'}">${status}</span>`;
+
+            let rows = `
+                <div class="field-row">
+                    <div class="field-label">Job ID</div>
+                    <div class="field-value" style="font-family:monospace">${data.ret_key || retKey}</div>
+                </div>
+                <div class="field-row">
+                    <div class="field-label">Status</div>
+                    <div class="field-value">${statusBadge}</div>
+                </div>
+                <div class="field-row">
+                    <div class="field-label">URL</div>
+                    <div class="field-value"><a href="${data.url}" target="_blank">${data.url || 'N/A'}</a></div>
+                </div>`;
+
+            if (data.http_code) rows += `
+                <div class="field-row">
+                    <div class="field-label">HTTP Code</div>
+                    <div class="field-value">${data.http_code}</div>
+                </div>`;
+
+            if (data.total_elapsed_seconds) rows += `
+                <div class="field-row">
+                    <div class="field-label">Elapsed</div>
+                    <div class="field-value">${Number(data.total_elapsed_seconds).toFixed(2)}s</div>
+                </div>`;
+
+            if (data.error) rows += `
+                <div class="field-row">
+                    <div class="field-label">Error</div>
+                    <div class="field-value text-danger">${data.error}</div>
+                </div>`;
+
+            let htmlSection = '';
+            if (data.html) {
+                const sizeKB = (data.html.length / 1024).toFixed(1);
+                htmlSection = `
+                    <div class="card-section">
+                        <div class="section-title">
+                            <i class="bi bi-file-earmark-code text-primary"></i>
+                            HTML Content <small class="text-muted fw-normal ms-1">${sizeKB} KB</small>
+                            <button class="btn btn-outline-secondary copy-btn ms-auto" onclick="copyHtml()">
+                                <i class="bi bi-clipboard"></i> Copy
+                            </button>
+                        </div>
+                        <div class="html-content" id="htmlContent">${escapeHtml(data.html)}</div>
+                    </div>`;
+            }
+
+            // Raw JSON (exclude html to keep it readable)
+            const rawData = {...data};
+            delete rawData.html;
+            const rawJson = JSON.stringify(rawData, null, 2);
+
+            document.getElementById('content').innerHTML = `
+                <div class="card-section">
+                    <div class="section-title"><i class="bi bi-info-circle text-primary"></i> Job Info</div>
+                    ${rows}
+                </div>
+                ${htmlSection}
+                <div class="card-section">
+                    <div class="section-title">
+                        <i class="bi bi-braces text-secondary"></i> Raw Data
+                        <button class="btn btn-outline-secondary copy-btn ms-auto" onclick="copyJson()">
+                            <i class="bi bi-clipboard"></i> Copy
+                        </button>
+                    </div>
+                    <div class="json-raw" id="jsonRaw">${escapeHtml(rawJson)}</div>
+                </div>`;
+
+            window._htmlContent = data.html || '';
+            window._jsonContent = rawJson;
+        }
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
+        function copyHtml() {
+            navigator.clipboard.writeText(window._htmlContent || '').then(() => {
+                showToast('HTML copied!');
+            });
+        }
+
+        function copyJson() {
+            navigator.clipboard.writeText(window._jsonContent || '').then(() => {
+                showToast('JSON copied!');
+            });
+        }
+
+        function showToast(msg) {
+            const t = document.createElement('div');
+            t.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#1e293b;color:white;padding:0.5rem 1rem;border-radius:8px;font-size:0.875rem;z-index:9999;';
+            t.textContent = msg;
+            document.body.appendChild(t);
+            setTimeout(() => t.remove(), 2000);
+        }
+
+        loadDetail();
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

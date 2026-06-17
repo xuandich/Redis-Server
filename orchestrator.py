@@ -18,9 +18,13 @@ from config import REDIS_HOST, REDIS_PORT, get_max_concurrent
 
 redis_client = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
 
+MAX_CONCURRENT_TOTAL = 10  # Global slot limit
+
 
 class ThreadSafeWorker(Worker):
-    """Worker safe for spawned threads - skips signal handlers"""
+    """Worker safe for spawned threads - skips signal handlers
+    Also checks global slot availability before picking jobs
+    """
     def _install_signal_handlers(self):
         """Skip signal installation - safe for threads"""
         pass
@@ -28,6 +32,7 @@ class ThreadSafeWorker(Worker):
     def monitor_work_horse(self, _job, _queue):
         """Skip death penalty monitoring - safe for threads"""
         pass
+
 
 
 def discover_worker_domains():

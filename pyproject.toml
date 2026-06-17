@@ -5,13 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "flask>=2.3.2",
     "openpyxl>=3.1.5",
     "pandas>=3.0.3",
     "playwright>=1.60.0",
     "psutil>=7.2.2",
+    "python-dotenv>=1.0.0",
     "redis>=8.0.0",
     "requests>=2.34.2",
     "rich>=15.0.0",
     "rq>=2.9.1",
-    "rq-dashboard>=0.15.0",
 ]

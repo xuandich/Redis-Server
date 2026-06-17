@@ -22,12 +22,14 @@ batch_results_*.json
 # Docker images (compressed)
 *.tar.gz
 *.tar
+Redis_Docker_Image/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+.claude/
 
 # OS
 .DS_Store

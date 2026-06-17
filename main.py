@@ -11,8 +11,8 @@ from config import (
 )
 
 redis_client = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-docker_client = docker.from_env()
-
+# Timeout must exceed JOB_TIMEOUT so container.wait() isn't cut off by HTTP socket timeout
+docker_client = docker.from_env(timeout=JOB_TIMEOUT + 120)
 
 _LUA_ACQUIRE = """
 local key = KEYS[1]
@@ -28,13 +28,10 @@ return 0
 
 
 def _acquire_slot(slot_type: str, key: str, max_slots: int, timeout: int = 300) -> bool:
-    """Acquire a slot using Lua script (atomic, works across processes)"""
+    """Acquire a slot using Lua script (atomic, cross-process safe)"""
     redis_key = f"slots:{slot_type}:{key}"
     start_time = time.time()
-
-    # Lazy register script (ensures Redis is ready)
     lua_acquire = redis_client.register_script(_LUA_ACQUIRE)
-
     while time.time() - start_time < timeout:
         try:
             if lua_acquire(keys=[redis_key], args=[max_slots]):
@@ -42,48 +39,63 @@ def _acquire_slot(slot_type: str, key: str, max_slots: int, timeout: int = 300) 
         except Exception as e:
             print(f"[ERROR] Slot acquire failed: {e}", flush=True)
             return False
-        time.sleep(0.05)  # Poll every 50ms
-
+        time.sleep(0.05)
     return False
 
 
 def _release_slot(slot_type: str, key: str):
-    """Release a slot using Redis"""
+    """Release a slot"""
     redis_key = f"slots:{slot_type}:{key}"
-    redis_client.decr(redis_key)
+    val = redis_client.decr(redis_key)
+    if val < 0:
+        redis_client.set(redis_key, 0)
+
+
+def _set_job_state(ret_key: str, state: str, url: str, domain: str, ttl: int = 3600):
+    """Set job state for dashboard tracking"""
+    redis_client.setex(f"job_state:{ret_key}", ttl, json.dumps({
+        'ret_key': ret_key,
+        'state': state,
+        'url': url,
+        'domain': domain,
+        'timestamp': time.time()
+    }, ensure_ascii=False, default=str))
+
+
+def _clear_job_state(ret_key: str):
+    redis_client.delete(f"job_state:{ret_key}")
 
 
 def crawl_job(url: str, domain: str, ret_key: str, proxy_type: str = 'standard') -> dict:
-    """Crawl job with dual concurrency limits (Redis-based):
-    - Global: max total containers across all domains
-    - Per-domain: max containers per domain
-    """
     job_id = ret_key[:8]
 
-    # 1. Wait for global slot
-    max_total = MAX_CONCURRENT_TOTAL
-    print(f"[CRAWL_JOB] {domain} {job_id} - START, waiting for global slot (max {max_total})...", flush=True)
-    if not _acquire_slot('global', 'total', max_total):
+    print(f"[CRAWL_JOB] {domain} {job_id} - START, waiting for global slot (max {MAX_CONCURRENT_TOTAL})...", flush=True)
+    if not _acquire_slot('global', 'total', MAX_CONCURRENT_TOTAL):
         print(f"[CRAWL_JOB] {domain} {job_id} - GLOBAL TIMEOUT", flush=True)
-        error_result = {'status': 'failed', 'error': 'Global slot timeout', 'ret_key': ret_key, 'domain': domain}
+        error_result = {'status': 'failed', 'error': 'Global slot timeout', 'ret_key': ret_key, 'domain': domain, 'url': url}
         redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
+        _clear_job_state(ret_key)
         return error_result
 
+    _set_job_state(ret_key, 'started', url, domain)
+
     try:
-        # 2. Wait for domain-specific slot
         max_domain = get_max_concurrent(domain)
         print(f"[CRAWL_JOB] {domain} {job_id} - waiting for domain slot (max {max_domain})...", flush=True)
         if not _acquire_slot('domain', domain, max_domain):
             print(f"[CRAWL_JOB] {domain} {job_id} - DOMAIN TIMEOUT", flush=True)
-            error_result = {'status': 'failed', 'error': 'Domain slot timeout', 'ret_key': ret_key, 'domain': domain}
+            error_result = {'status': 'failed', 'error': 'Domain slot timeout', 'ret_key': ret_key, 'domain': domain, 'url': url}
             redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
+            _clear_job_state(ret_key)
             return error_result
+
+        _set_job_state(ret_key, 'running', url, domain)
 
         try:
             print(f"[CRAWL_JOB] {domain} {job_id} - ACQUIRED SLOTS, spawning container...", flush=True)
             result = _spawn_and_wait_container(url, domain, ret_key, proxy_type)
-            # Write result to Redis (for test_batch.py polling)
             redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(result, ensure_ascii=False, default=str))
+            _clear_job_state(ret_key)
             print(f"[CRAWL_JOB] {domain} {job_id} - CONTAINER DONE", flush=True)
             return result
         finally:
@@ -95,15 +107,31 @@ def crawl_job(url: str, domain: str, ret_key: str, proxy_type: str = 'standard')
 
 
 def _spawn_and_wait_container(url: str, domain: str, ret_key: str, proxy_type: str) -> dict:
-    """Actually spawn container and wait for result"""
+    # Auto-load worker image from cache if missing
+    image_name = f'worker-{domain}:latest'
+    try:
+        docker_client.images.get(image_name)
+    except docker.errors.ImageNotFound:
+        import os
+        cache_file = f'workers/{domain}/worker-{domain}-latest.tar.gz'
+        if os.path.exists(cache_file):
+            print(f"[{domain}] Loading image from cache: {cache_file}")
+            with open(cache_file, 'rb') as f:
+                docker_client.images.load(f)
+            print(f"[{domain}] Image loaded: {image_name}")
+        else:
+            error_msg = f'Worker image {image_name} not found'
+            return {'url': url, 'ret_key': ret_key, 'domain': domain, 'error': error_msg, 'status': 'failed'}
+
     volumes = {
         CHROMIUM_SNAP_DIR: {'bind': CHROMIUM_SNAP_DIR, 'mode': 'ro'},
     }
+    # Use PROXY_HOST_DIR (host path) — Docker daemon needs host path to mount volumes
     if PROXY_HOST_DIR:
         volumes[PROXY_HOST_DIR] = {'bind': '/app/Proxy', 'mode': 'ro'}
 
     container = docker_client.containers.run(
-        f'worker-{domain}:latest',
+        image_name,
         environment={
             'URL': url,
             'RET_KEY': ret_key,
@@ -126,37 +154,25 @@ def _spawn_and_wait_container(url: str, domain: str, ret_key: str, proxy_type: s
         container.wait(timeout=JOB_TIMEOUT)
         print(f"[{domain}] Container {container.short_id} finished")
     except Exception as e:
-        # Timeout or error → kill container immediately
         print(f"[{domain}] Container error: {e}")
         try:
             container.kill()
-            print(f"[{domain}] Container killed")
         except:
             pass
         error_result = {
-            'url': url,
-            'ret_key': ret_key,
-            'domain': domain,
-            'error': f'Container timeout/error: {str(e)}',
-            'status': 'failed'
+            'url': url, 'ret_key': ret_key, 'domain': domain,
+            'error': f'Container timeout/error: {str(e)}', 'status': 'failed'
         }
         redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
         return error_result
 
-    # Fetch result from Redis
     result = redis_client.get(f"result:{ret_key}")
     if result:
         return json.loads(result)
 
-    # No result returned by container
-    error_msg = 'No result from container (timeout or crash)'
-    print(f"[{domain}] {error_msg}")
     error_result = {
-        'url': url,
-        'ret_key': ret_key,
-        'domain': domain,
-        'error': error_msg,
-        'status': 'failed'
+        'url': url, 'ret_key': ret_key, 'domain': domain,
+        'error': 'No result from container', 'status': 'failed'
     }
     redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
     return error_result

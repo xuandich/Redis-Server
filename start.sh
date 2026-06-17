@@ -47,57 +47,78 @@ fi
 echo "✅ Chromium snap found"
 echo ""
 
-# Auto-load orchestrator image from tar.gz if missing
-echo "🔍 Checking Docker images..."
-ORCHESTRATOR_IMAGE="redis_server-orchestrator:latest"
-ORCHESTRATOR_BACKUP="$PROJECT_ROOT/orchestrator-latest.tar.gz"
+# Setup Docker image cache directory
+IMAGE_CACHE_DIR="$PROJECT_ROOT/Redis_Docker_Image"
+mkdir -p "$IMAGE_CACHE_DIR"
 
-if ! docker image inspect "$ORCHESTRATOR_IMAGE" > /dev/null 2>&1; then
-    echo "📦 Orchestrator image not found: $ORCHESTRATOR_IMAGE"
+# Function to load or build Docker image
+load_or_build_image() {
+    local IMAGE_NAME="$1"
+    local SERVICE_NAME="$2"
+    local CACHE_FILE="$IMAGE_CACHE_DIR/${IMAGE_NAME//[:\/]/-}.tar.gz"
 
-    if [ -f "$ORCHESTRATOR_BACKUP" ]; then
-        echo "   Loading from: orchestrator-latest.tar.gz..."
-        if docker load -i "$ORCHESTRATOR_BACKUP" > /dev/null 2>&1; then
-            echo "   ✅ Loaded: $ORCHESTRATOR_IMAGE"
+    if docker image inspect "$IMAGE_NAME" > /dev/null 2>&1; then
+        echo "✅ $IMAGE_NAME already in system"
+        return 0
+    fi
+
+    echo "📦 $IMAGE_NAME not found in system"
+
+    if [ -f "$CACHE_FILE" ]; then
+        echo "   📂 Loading from cache: $(basename $CACHE_FILE)"
+        if docker load -i "$CACHE_FILE" > /dev/null 2>&1; then
+            echo "   ✅ Loaded: $IMAGE_NAME"
+            return 0
         else
             echo "   ❌ Failed to load, rebuilding..."
-            docker compose build orchestrator > /dev/null 2>&1
-            echo "   ✅ Built: $ORCHESTRATOR_IMAGE"
         fi
-    else
-        echo "   Building new image..."
-        docker compose build orchestrator > /dev/null 2>&1
-        echo "   ✅ Built: $ORCHESTRATOR_IMAGE"
-        echo "   💾 Saving backup to orchestrator-latest.tar.gz..."
-        docker save "$ORCHESTRATOR_IMAGE" | gzip > "$ORCHESTRATOR_BACKUP"
     fi
-else
-    echo "✅ Orchestrator image found: $ORCHESTRATOR_IMAGE"
-fi
 
-# Auto-load worker images from tar.gz if missing
+    echo "   🔨 Building new image: $IMAGE_NAME"
+    if docker compose build "$SERVICE_NAME" > /dev/null 2>&1; then
+        echo "   ✅ Built: $IMAGE_NAME"
+        echo "   💾 Saving to cache: $(basename $CACHE_FILE)"
+        docker save "$IMAGE_NAME" | gzip > "$CACHE_FILE"
+        echo "   ✅ Cached: $CACHE_FILE"
+        return 0
+    else
+        echo "   ❌ Failed to build: $IMAGE_NAME"
+        return 1
+    fi
+}
+
+echo "🔍 Checking Docker images..."
+load_or_build_image "redis_server-orchestrator:latest" "orchestrator"
+load_or_build_image "redis_server-dashboard:latest" "dashboard"
+
+# Load worker images from workers directory
 echo "🔍 Checking worker Docker images..."
 WORKERS_DIR="$PROJECT_ROOT/workers"
-for tar_file in "$WORKERS_DIR"/*/*.tar.gz; do
-    if [ -f "$tar_file" ]; then
-        filename=$(basename "$tar_file")
-        # Extract domain name from filename (e.g., worker-fnac-latest.tar.gz → fnac)
-        domain=$(echo "$filename" | sed 's/worker-//g' | sed 's/-latest.tar.gz//g')
-        image_name="worker-${domain}:latest"
+if [ -d "$WORKERS_DIR" ]; then
+    for worker_dir in "$WORKERS_DIR"/*/; do
+        if [ -d "$worker_dir" ]; then
+            domain=$(basename "$worker_dir")
+            image_name="worker-${domain}:latest"
 
-        if ! docker image inspect "$image_name" > /dev/null 2>&1; then
-            echo "📦 Image not found: $image_name"
-            echo "   Loading from: $filename..."
-            if docker load -i "$tar_file" > /dev/null 2>&1; then
-                echo "   ✅ Loaded: $image_name"
+            if docker image inspect "$image_name" > /dev/null 2>&1; then
+                echo "✅ $image_name already in system"
             else
-                echo "   ❌ Failed to load: $image_name"
+                cache_file="$IMAGE_CACHE_DIR/worker-${domain}-latest.tar.gz"
+                if [ -f "$cache_file" ]; then
+                    echo "📂 Loading worker $domain from cache..."
+                    if docker load -i "$cache_file" > /dev/null 2>&1; then
+                        echo "✅ Loaded: $image_name"
+                    else
+                        echo "❌ Failed to load worker $domain"
+                    fi
+                else
+                    echo "📦 No cache found for worker $domain"
+                    echo "   (Build it separately with: docker compose build worker-$domain)"
+                fi
             fi
-        else
-            echo "✅ Image found: $image_name"
         fi
-    fi
-done
+    done
+fi
 echo ""
 
 echo "📂 Project: $PROJECT_ROOT"
@@ -114,23 +135,17 @@ if [[ "$@" == *"-d"* ]]; then
     DOCKER_PID=$!
     echo "✅ Containers started (PID: $DOCKER_PID)"
 
-    # Wait for Redis to be ready
+    # Wait for services to be ready
     sleep 3
 
-    # Start RQ Dashboard in background
-    echo "📊 Starting RQ Dashboard..."
-    python -m rq_dashboard \
-        --redis-host localhost \
-        --redis-port "$REDIS_PORT" \
-        --port 9181 &
-    DASHBOARD_PID=$!
-    echo "✅ Dashboard started (PID: $DASHBOARD_PID)"
-    echo "🌐 Open http://localhost:9181"
+    echo "✅ All services started!"
+    echo "🌐 Dashboard: http://localhost:5000"
+    echo "📊 Redis: localhost:6379"
     echo ""
     echo "Press Ctrl+C to stop all services"
 
     # Cleanup on exit
-    trap "kill $DOCKER_PID $DASHBOARD_PID 2>/dev/null" EXIT
+    trap "kill $DOCKER_PID 2>/dev/null" EXIT
 
     # Keep script alive (blocks until Ctrl+C)
     wait $DOCKER_PID
