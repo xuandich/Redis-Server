@@ -83,6 +83,7 @@ for i, url in enumerate(selected_urls, 1):
             ret_key=ret_key,
             proxy_type=proxy_type,
             job_timeout=job_timeout,
+            job_id=ret_key,
         )
 
         jobs.append((job.id, ret_key, url))

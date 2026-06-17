@@ -82,57 +82,75 @@ def start_worker_for_domain(domain):
 def _retry_stale_jobs():
     """Re-enqueue in-flight jobs lost during crash.
 
-    Logic:
-    - req_meta:{ret_key} is written at the start of crawl_job() = job was picked by RQ
-    - If req_meta exists but result:{ret_key} doesn't = job was interrupted → re-enqueue
-    - Queued jobs (never picked) still live in RQ queue (docker compose stop preserves Redis AOF)
-    - Also delete all stale job_state:* keys (ghost entries from previous session)
+    job_state:{ret_key} (queued/started/running) = job was picked by RQ but not finished.
+    Since job_id=ret_key, we can check RQ job status directly.
+    Queued jobs never picked by RQ survive in the queue via Redis AOF (docker compose stop).
     """
     import json
+    from rq.job import Job as RQJob
+    from rq.exceptions import NoSuchJobError
 
-    # Delete all stale job_state keys (avoid ghost entries in dashboard)
+    retried = skipped = 0
     cursor = 0
+
     while True:
         cursor, keys = redis_client.scan(cursor, match=b'job_state:*', count=100)
         for key in keys:
-            redis_client.delete(key)
-        if cursor == 0:
-            break
-
-    # Re-enqueue in-flight jobs: req_meta exists but no result
-    retried = 0
-    cursor = 0
-    while True:
-        cursor, keys = redis_client.scan(cursor, match=b'req_meta:*', count=100)
-        for key in keys:
             try:
-                ret_key = key.decode().replace('req_meta:', '')
-
-                # Already finished — clean up
-                if redis_client.exists(f'result:{ret_key}'):
-                    redis_client.delete(key)
+                value = redis_client.get(key)
+                redis_client.delete(key)
+                if not value:
                     continue
 
-                metadata = redis_client.hgetall(key)
-                url = metadata.get(b'url', b'').decode()
-                domain = metadata.get(b'domain', b'').decode()
-                proxy_type = metadata.get(b'proxy_type', b'standard').decode()
+                data = json.loads(value)
+                state = data.get('state', '')
+                ret_key = data.get('ret_key', '')
+                url = data.get('url', '')
+                domain = data.get('domain', '')
+                proxy_type = data.get('proxy_type', 'standard')
 
-                if url and domain:
-                    import main as crawler_main
-                    q = Queue(f'crawler:{domain}', connection=redis_client)
-                    q.enqueue(crawler_main.crawl_job, url, domain, ret_key, proxy_type, job_timeout=600)
-                    retried += 1
-                    print(f"[Retry] Re-enqueued {ret_key[:8]} ({domain}): {url[:70]}")
+                if state not in ('queued', 'started', 'running'):
+                    continue
 
-                redis_client.delete(key)
+                # Already finished — skip
+                if redis_client.exists(f'result:{ret_key}'):
+                    skipped += 1
+                    continue
+
+                # Check if job is still in RQ queue (truly queued, not yet picked up)
+                try:
+                    rq_job = RQJob.fetch(ret_key, connection=redis_client)
+                    job_status = rq_job.get_status()
+                    if job_status == 'queued':
+                        # Still waiting in queue — don't re-enqueue
+                        skipped += 1
+                        continue
+                    elif job_status in ('finished', 'failed'):
+                        skipped += 1
+                        continue
+                    else:
+                        # status='started' means worker picked it up but was killed
+                        # Delete the stale job hash so we can re-enqueue with same ID
+                        try:
+                            rq_job.delete()
+                        except Exception:
+                            pass
+                except NoSuchJobError:
+                    pass  # Job lost entirely → re-enqueue
+
+                import main as crawler_main
+                q = Queue(f'crawler:{domain}', connection=redis_client)
+                q.enqueue(crawler_main.crawl_job, url, domain, ret_key, proxy_type,
+                          job_timeout=600, job_id=ret_key)
+                retried += 1
+                print(f"[Retry] Re-enqueued {ret_key[:8]} ({domain}): {url[:70]}")
             except Exception as e:
                 print(f"[Retry] Error processing {key}: {e}")
         if cursor == 0:
             break
 
-    if retried:
-        print(f"[Retry] Re-enqueued {retried} in-flight jobs")
+    if retried or skipped:
+        print(f"[Retry] Re-enqueued={retried}, skipped={skipped}")
 
 
 def cleanup_stale_workers(domains):

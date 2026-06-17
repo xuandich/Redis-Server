@@ -70,10 +70,6 @@ def _clear_job_state(ret_key: str):
 def crawl_job(url: str, domain: str, ret_key: str, proxy_type: str = 'standard') -> dict:
     job_id = ret_key[:8]
 
-    # Save request metadata immediately (for recovery if crash before finish)
-    redis_client.hset(f"req_meta:{ret_key}", mapping={'url': url, 'domain': domain, 'proxy_type': proxy_type})
-    redis_client.expire(f"req_meta:{ret_key}", 86400)
-
     # Mark as queued immediately (before slot wait, so dashboard shows pending jobs)
     _set_job_state(ret_key, 'queued', url, domain, proxy_type)
 

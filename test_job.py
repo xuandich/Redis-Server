@@ -42,6 +42,7 @@ job = q.enqueue(
     ret_key=ret_key,
     proxy_type=proxy_type,
     job_timeout=180,
+    job_id=ret_key,
 )
 
 print(f"Job ID : {job.id}")
