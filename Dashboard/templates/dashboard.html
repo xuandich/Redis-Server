@@ -362,13 +362,6 @@
                     <div class="stat-label">Queued</div>
                 </div>
             </div>
-            <div class="stat-card started" onclick="location.href='/jobs/started'" style="cursor:pointer">
-                <div class="stat-icon-wrapper started"><i class="bi bi-hourglass-split"></i></div>
-                <div class="stat-content">
-                    <div class="stat-number" id="startedCount">0</div>
-                    <div class="stat-label">Started</div>
-                </div>
-            </div>
             <div class="stat-card running" onclick="location.href='/jobs/running'" style="cursor:pointer">
                 <div class="stat-icon-wrapper running"><i class="bi bi-play-circle"></i></div>
                 <div class="stat-content">
@@ -400,9 +393,6 @@
             <button class="btn btn-warning" onclick="clearState('queued')">
                 <i class="bi bi-trash"></i> Clear Queued
             </button>
-            <button class="btn btn-info" onclick="clearState('started')">
-                <i class="bi bi-trash"></i> Clear Started
-            </button>
             <button class="btn btn-primary" onclick="clearState('running')">
                 <i class="bi bi-trash"></i> Clear Running
             </button>
@@ -429,20 +419,6 @@
                     <div class="empty-state">
                         <i class="bi bi-inbox"></i>
                         <p>No queued jobs</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Started -->
-            <div class="job-column" id="started">
-                <div class="job-column-header">
-                    <h5><i class="bi bi-hourglass-split text-info"></i> Started</h5>
-                    <span class="badge bg-info" id="startedBadge">0</span>
-                </div>
-                <div class="job-list" id="startedJobs">
-                    <div class="empty-state">
-                        <i class="bi bi-inbox"></i>
-                        <p>No waiting jobs</p>
                     </div>
                 </div>
             </div>
@@ -652,18 +628,16 @@
                 console.log('API data:', data);
 
                 document.getElementById('queuedCount').textContent = (data.queued || []).length;
-                document.getElementById('startedCount').textContent = (data.started || []).length;
                 document.getElementById('runningCount').textContent = (data.running || []).length;
                 document.getElementById('finishedCount').textContent = (data.finished || []).length;
                 document.getElementById('failedCount').textContent = (data.failed || []).length;
 
                 renderJobs('queued', data.queued || []);
-                renderJobs('started', data.started || []);
                 renderJobs('running', data.running || []);
                 renderJobs('finished', data.finished || []);
                 renderJobs('failed', data.failed || []);
 
-                const total = (data.queued || []).length + (data.started || []).length + (data.running || []).length + (data.finished || []).length + (data.failed || []).length;
+                const total = (data.queued || []).length + (data.running || []).length + (data.finished || []).length + (data.failed || []).length;
                 document.getElementById('totalJobs').textContent = `Total: ${total} jobs`;
                 document.getElementById('lastUpdate').textContent = `Updated: ${new Date().toLocaleTimeString()}`;
                 document.getElementById('redisInfo').textContent = '✅ Connected';

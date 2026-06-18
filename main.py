@@ -51,7 +51,7 @@ def _release_slot(slot_type: str, key: str):
         redis_client.set(redis_key, 0)
 
 
-def _set_job_state(ret_key: str, state: str, url: str, domain: str, proxy_type: str = 'standard', ttl: int = 3600):
+def _set_job_state(ret_key: str, state: str, url: str, domain: str, proxy_type: str = 'standard', ttl: int = 86400):
     """Set job state for dashboard tracking"""
     redis_client.setex(f"job_state:{ret_key}", ttl, json.dumps({
         'ret_key': ret_key,
@@ -80,8 +80,6 @@ def crawl_job(url: str, domain: str, ret_key: str, proxy_type: str = 'standard')
         redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
         _clear_job_state(ret_key)
         return error_result
-
-    _set_job_state(ret_key, 'started', url, domain, proxy_type)
 
     try:
         max_domain = get_max_concurrent(domain)

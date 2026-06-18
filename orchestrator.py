@@ -9,20 +9,43 @@ Architecture:
 """
 
 import sys
+import time
 from pathlib import Path
 from threading import Thread
 from rq import Worker, Queue
 import redis as redis_lib
 
-from config import REDIS_HOST, REDIS_PORT, get_max_concurrent
+from config import REDIS_HOST, REDIS_PORT, get_max_concurrent, MAX_CONCURRENT_TOTAL
 
 redis_client = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
 
 
+def _can_acquire_slots(domain: str) -> bool:
+    """Kiểm tra global + domain slots có available không"""
+    try:
+        global_slots = int(redis_client.get('slots:global:total') or 0)
+        if global_slots >= MAX_CONCURRENT_TOTAL:
+            return False
+
+        max_domain = get_max_concurrent(domain)
+        domain_slots = int(redis_client.get(f'slots:domain:{domain}') or 0)
+        if domain_slots >= max_domain:
+            return False
+
+        return True
+    except Exception as e:
+        print(f"[ERROR] Slot check failed: {e}", flush=True)
+        return True  # On error, assume slots available
+
+
 class ThreadSafeWorker(Worker):
     """Worker safe for spawned threads - skips signal handlers
-    Also checks global slot availability before picking jobs
+    Checks slots BEFORE picking job (phương án 1)
     """
+    def __init__(self, *args, domain=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.domain = domain
+
     def _install_signal_handlers(self):
         """Skip signal installation - safe for threads"""
         pass
@@ -30,6 +53,18 @@ class ThreadSafeWorker(Worker):
     def monitor_work_horse(self, _job, _queue):
         """Skip death penalty monitoring - safe for threads"""
         pass
+
+    def dequeue_job_and_maintain_ttl(self, timeout, max_idle_time=None):
+        """Override để check slots TRƯỚC khi dequeue
+
+        Nếu slots full → sleep + heartbeat (không pick job, worker không die)
+        Nếu slots available → dequeue bình thường
+        """
+        while not _can_acquire_slots(self.domain):
+            time.sleep(1)
+            self.heartbeat()  # Giữ worker alive trong Redis
+
+        return super().dequeue_job_and_maintain_ttl(timeout, max_idle_time)
 
 
 
@@ -68,21 +103,21 @@ def start_worker_for_domain(domain):
         [queue],
         connection=redis_client,
         name=f'worker-{domain}',
-        default_result_ttl=3600,  # Keep job results 1 hour
-        job_monitoring_interval=5,  # Check job health every 5s
+        default_result_ttl=3600,
+        job_monitoring_interval=5,
+        domain=domain,  # Pass domain để check slots
     )
 
     print(f"[{domain.upper()} Worker] Listening to queue: {queue_name}")
     print(f"  - Max concurrent jobs: {max_concurrent}")
-    print(f"  - Job timeout: 180s (from test_job.py)")
-    print(f"  - Container timeout: 120s (from .env JOB_TIMEOUT)")
+    print(f"  - Slot checking: ✅ Enabled (check BEFORE pick)")
     worker.work()
 
 
 def _retry_stale_jobs():
     """Re-enqueue in-flight jobs lost during crash.
 
-    job_state:{ret_key} (queued/started/running) = job was picked by RQ but not finished.
+    job_state:{ret_key} (queued/running) = job was picked by RQ but not finished.
     Since job_id=ret_key, we can check RQ job status directly.
     Queued jobs never picked by RQ survive in the queue via Redis AOF (docker compose stop).
     """
@@ -98,8 +133,8 @@ def _retry_stale_jobs():
         for key in keys:
             try:
                 value = redis_client.get(key)
-                redis_client.delete(key)
                 if not value:
+                    redis_client.delete(key)
                     continue
 
                 data = json.loads(value)
@@ -109,11 +144,13 @@ def _retry_stale_jobs():
                 domain = data.get('domain', '')
                 proxy_type = data.get('proxy_type', 'standard')
 
-                if state not in ('queued', 'started', 'running'):
+                if state not in ('queued', 'running'):
+                    redis_client.delete(key)
                     continue
 
-                # Already finished — skip
+                # Already finished — cleanup job_state
                 if redis_client.exists(f'result:{ret_key}'):
+                    redis_client.delete(key)
                     skipped += 1
                     continue
 
@@ -122,15 +159,15 @@ def _retry_stale_jobs():
                     rq_job = RQJob.fetch(ret_key, connection=redis_client)
                     job_status = rq_job.get_status()
                     if job_status == 'queued':
-                        # Still waiting in queue — don't re-enqueue
+                        # Still waiting in queue — giữ job_state để dashboard vẫn track được
                         skipped += 1
                         continue
                     elif job_status in ('finished', 'failed'):
+                        redis_client.delete(key)
                         skipped += 1
                         continue
                     else:
-                        # status='started' means worker picked it up but was killed
-                        # Delete the stale job hash so we can re-enqueue with same ID
+                        # Worker picked it up but was killed — xóa RQ job hash để re-enqueue
                         try:
                             rq_job.delete()
                         except Exception:
@@ -138,10 +175,21 @@ def _retry_stale_jobs():
                 except NoSuchJobError:
                     pass  # Job lost entirely → re-enqueue
 
+                redis_client.delete(key)  # Xóa job_state cũ trước khi re-enqueue
                 import main as crawler_main
                 q = Queue(f'crawler:{domain}', connection=redis_client)
                 q.enqueue(crawler_main.crawl_job, url, domain, ret_key, proxy_type,
                           job_timeout=600, job_id=ret_key)
+                # Tạo lại job_state để dashboard track được ngay
+                import json as _json, time as _time
+                redis_client.setex(f'job_state:{ret_key}', 86400, _json.dumps({
+                    'state': 'queued',
+                    'ret_key': ret_key,
+                    'url': url,
+                    'domain': domain,
+                    'proxy_type': proxy_type,
+                    'timestamp': _time.time(),
+                }))
                 retried += 1
                 print(f"[Retry] Re-enqueued {ret_key[:8]} ({domain}): {url[:70]}")
             except Exception as e:
@@ -169,12 +217,12 @@ def cleanup_stale_workers(domains):
     while True:
         cursor, keys = redis_client.scan(cursor, match=b'slots:*', count=100)
         for key in keys:
-            redis_client.set(key, 0)
-            print(f"[Cleanup] Reset slot: {key.decode()}")
+            redis_client.delete(key)
+            print(f"[Cleanup] Deleted slot: {key.decode()}")
         if cursor == 0:
             break
 
-    # Re-enqueue stale started/running jobs — they were dequeued by RQ before crash, lost from queue
+    # Re-enqueue stale running jobs — they were dequeued by RQ before crash, lost from queue
     _retry_stale_jobs()
 
 

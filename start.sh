@@ -128,12 +128,22 @@ echo ""
 # Set env var
 export PROXY_HOST_DIR="$PROXY_DIR"
 
-# Start docker compose in background (if -d flag)
-if [[ "$@" == *"-d"* ]]; then
-    # Background docker compose (don't pass -d to it - we background manually)
-    docker compose up &
+# Check for -quiet flag
+QUIET_MODE=false
+if [[ "$@" == *"-quiet"* ]]; then
+    QUIET_MODE=true
+fi
+
+# Foreground mode (default - no -quiet flag)
+if [ "$QUIET_MODE" = false ]; then
+    echo "🚀 Starting services (foreground mode)..."
+    echo ""
+    docker compose up
+else
+    # Background quiet mode (with -quiet flag)
+    docker compose up > /dev/null 2>&1 &
     DOCKER_PID=$!
-    echo "✅ Containers started (PID: $DOCKER_PID)"
+    echo "✅ Containers started in background (PID: $DOCKER_PID)"
 
     # Wait for services to be ready
     sleep 3
@@ -142,14 +152,5 @@ if [[ "$@" == *"-d"* ]]; then
     echo "🌐 Dashboard: http://localhost:5000"
     echo "📊 Redis: localhost:6379"
     echo ""
-    echo "Press Ctrl+C to stop all services"
-
-    # Cleanup on exit
-    trap "kill $DOCKER_PID 2>/dev/null" EXIT
-
-    # Keep script alive (blocks until Ctrl+C)
-    wait $DOCKER_PID
-else
-    # Foreground mode (no -d flag)
-    docker compose up "$@"
+    echo "Stop with: pkill -f 'docker compose'"
 fi

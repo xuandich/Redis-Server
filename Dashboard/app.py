@@ -5,6 +5,7 @@ Phù hợp với test_batch.py / test_job.py / main.py
 import os
 import json
 import logging
+import uuid
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from flask import Flask, render_template, jsonify, request
@@ -55,7 +56,7 @@ def dashboard():
 @app.route('/jobs/<state>')
 def jobs_list(state):
     """Paginated job list page for a specific state"""
-    valid_states = ['queued', 'started', 'running', 'finished', 'failed']
+    valid_states = ['queued', 'running', 'finished', 'failed']
     if state not in valid_states:
         return "Invalid state", 404
     return render_template('jobs_list.html', state=state)
@@ -70,7 +71,7 @@ def job_detail(ret_key):
 @app.route('/api/jobs/<state>')
 def get_jobs_by_state(state):
     """Paginated API for jobs in a specific state"""
-    valid_states = ['queued', 'started', 'running', 'finished', 'failed']
+    valid_states = ['queued', 'running', 'finished', 'failed']
     if state not in valid_states:
         return jsonify({'error': 'Invalid state'}), 400
 
@@ -79,7 +80,7 @@ def get_jobs_by_state(state):
     all_jobs = []
 
     try:
-        if state in ['queued', 'started', 'running']:
+        if state in ['queued', 'running']:
             # Scan job_state:* keys (set by test_batch.py and main.py)
             seen = set()
             cursor = 0
@@ -107,25 +108,46 @@ def get_jobs_by_state(state):
                 if cursor == 0:
                     break
 
-            # For queued: also scan actual RQ queues (jobs not yet picked up may lack job_state)
+            # For queued: also scan actual RQ queues - dùng pipeline batch fetch
             if state == 'queued':
-                queue_keys = redis_conn.keys('rq:queue:*')
+                queue_keys = redis_conn.keys('rq:queue:crawler:*')
                 for k in queue_keys:
                     if isinstance(k, bytes):
                         k = k.decode()
                     queue_name = k.replace('rq:queue:', '')
+                    domain = queue_name.replace('crawler:', '')
                     try:
-                        q = Queue(queue_name, connection=redis_conn)
-                        for job_id in q.get_job_ids():
+                        job_ids = redis_conn.lrange(k, 0, -1)
+                        if not job_ids:
+                            continue
+
+                        # Batch fetch bằng pipeline
+                        pipe = redis_conn.pipeline()
+                        for job_id in job_ids:
+                            if isinstance(job_id, bytes):
+                                job_id = job_id.decode()
+                            pipe.hgetall(f'rq:job:{job_id}')
+                        job_hashes = pipe.execute()
+
+                        for job_id, job_hash in zip(job_ids, job_hashes):
                             try:
-                                job = Job.fetch(job_id, connection=redis_conn)
-                                ret_key = job.kwargs.get('ret_key', job_id)
+                                if isinstance(job_id, bytes):
+                                    job_id = job_id.decode()
+                                if not job_hash:
+                                    continue
+                                ret_key = job_id  # job_id=ret_key trong hệ thống này
                                 if ret_key not in seen:
                                     seen.add(ret_key)
+                                    description = job_hash.get(b'description', b'').decode() if isinstance(job_hash.get(b'description', b''), bytes) else job_hash.get('description', '')
+                                    url = 'N/A'
+                                    import re
+                                    match = re.search(r"url='([^']+)'", description)
+                                    if match:
+                                        url = match.group(1)
                                     all_jobs.append({
                                         'ret_key': ret_key,
-                                        'url': job.kwargs.get('url', 'N/A'),
-                                        'domain': job.kwargs.get('domain', 'unknown'),
+                                        'url': url,
+                                        'domain': domain,
                                         'status': 'queued',
                                     })
                             except:
@@ -206,51 +228,51 @@ def get_jobs():
 
     jobs_data = {
         'queued': [],
-        'started': [],
         'running': [],
         'finished': [],
         'failed': []
     }
 
     try:
-        # Scan RQ queues for queued jobs (auto-discover from Redis)
-        try:
-            queue_keys = redis_conn.keys('rq:queue:*') + redis_conn.keys('crawler:*')
-            queue_names = set()
-            for k in queue_keys:
-                if isinstance(k, bytes):
-                    k = k.decode()
-                if k.startswith('rq:queue:'):
-                    queue_names.add(k.replace('rq:queue:', ''))
-                elif ':' in k and not k.startswith('rq:') and not k.startswith('job_state:') and not k.startswith('result:') and not k.startswith('slots:'):
-                    queue_names.add(k)
-            for queue_name in queue_names:
+        # Scan result:* keys TRƯỚC - parse ngay + build seen_result để tránh duplicate
+        seen_result = set()
+        cursor = 0
+        while True:
+            cursor, keys = redis_conn.scan(cursor, match='result:*', count=100)
+            for key in keys:
                 try:
-                    q = Queue(queue_name, connection=redis_conn)
-                    for job_id in q.get_job_ids():
-                        try:
-                            job = Job.fetch(job_id, connection=redis_conn)
-                            # Extract ret_key from kwargs
-                            ret_key = job.kwargs.get('ret_key', job_id)
-                            url = job.kwargs.get('url', 'N/A')
-                            domain = job.kwargs.get('domain', 'unknown')
+                    ret_key = key.replace('result:', '')
+                    if ret_key in seen_result:
+                        continue  # SCAN trả duplicate khi Redis rehash
+                    seen_result.add(ret_key)
 
-                            job_info = {
-                                'ret_key': ret_key[:8],
-                                'ret_key_full': ret_key,
-                                'url': url,
-                                'domain': domain,
-                                'status': 'queued',
-                            }
-                            jobs_data['queued'].append(job_info)
-                        except:
-                            pass
+                    value = redis_conn.get(key)
+                    if not value:
+                        continue
+                    result = json.loads(value)
+
+                    job_info = {
+                        'ret_key': ret_key[:8],
+                        'ret_key_full': ret_key,
+                        'url': result.get('url', 'N/A'),
+                        'domain': result.get('domain', 'unknown'),
+                        'status': result.get('status', 'unknown'),
+                        'http_code': result.get('http_code', 0),
+                        'error': result.get('error', ''),
+                        'html_size': len(result.get('html', '')),
+                        'total_elapsed_seconds': result.get('total_elapsed_seconds', 0),
+                    }
+                    if result.get('status') == 'success':
+                        jobs_data['finished'].append(job_info)
+                    else:
+                        jobs_data['failed'].append(job_info)
                 except:
                     pass
-        except:
-            pass
+            if cursor == 0:
+                break
 
-        # Scan job_state:* keys (queued/started/running jobs)
+        # Scan job_state:* keys - skip nếu đã có result (tránh đếm 2 lần)
+        seen_queued = set()
         cursor = 0
         while True:
             cursor, state_keys = redis_conn.scan(cursor, match='job_state:*', count=100)
@@ -261,6 +283,8 @@ def get_jobs():
                         continue
                     state_data = json.loads(value)
                     ret_key = state_data.get('ret_key', '')
+                    if ret_key in seen_result:
+                        continue  # đã có result, bỏ qua job_state cũ
                     state = state_data.get('state', 'unknown')
 
                     job_info = {
@@ -271,11 +295,9 @@ def get_jobs():
                         'status': state,
                     }
 
-                    # Categorize by state
                     if state == 'queued':
+                        seen_queued.add(ret_key)
                         jobs_data['queued'].append(job_info)
-                    elif state == 'started':
-                        jobs_data['started'].append(job_info)
                     elif state == 'running':
                         jobs_data['running'].append(job_info)
                 except:
@@ -283,58 +305,60 @@ def get_jobs():
             if cursor == 0:
                 break
 
-        # Scan result:* keys (finished/failed jobs)
-        cursor = 0
-        result_keys = []
-        while True:
-            cursor, keys = redis_conn.scan(cursor, match='result:*', count=100)
-            result_keys.extend(keys)
-            if cursor == 0:
-                break
+        # Scan RQ queues - bổ sung jobs chưa có job_state
+        try:
+            queue_keys = redis_conn.keys('rq:queue:crawler:*')
+            for k in queue_keys:
+                if isinstance(k, bytes):
+                    k = k.decode()
+                domain = k.replace('rq:queue:crawler:', '')
+                try:
+                    job_ids = redis_conn.lrange(k, 0, -1)
+                    if not job_ids:
+                        continue
 
-        logger.info(f"Found {len(result_keys)} result keys, queued={len(jobs_data['queued'])}, started={len(jobs_data['started'])}")
+                    pipe = redis_conn.pipeline()
+                    for job_id in job_ids:
+                        if isinstance(job_id, bytes):
+                            job_id = job_id.decode()
+                        pipe.hgetall(f'rq:job:{job_id}')
+                    job_hashes = pipe.execute()
 
-        # Parse mỗi result
-        for key in result_keys:
-            try:
-                value = redis_conn.get(key)
-                if not value:
-                    continue
+                    for job_id, job_hash in zip(job_ids, job_hashes):
+                        try:
+                            if isinstance(job_id, bytes):
+                                job_id = job_id.decode()
+                            if not job_hash:
+                                continue
+                            ret_key = job_id  # job_id=ret_key khi enqueue
+                            if ret_key in seen_queued or ret_key in seen_result:
+                                continue  # đã có từ job_state hoặc result
+                            description = job_hash.get('description', '')
+                            import re
+                            url_match = re.search(r"url='([^']+)'", description)
+                            url = url_match.group(1) if url_match else 'N/A'
+                            jobs_data['queued'].append({
+                                'ret_key': ret_key[:8],
+                                'ret_key_full': ret_key,
+                                'url': url,
+                                'domain': domain,
+                                'status': 'queued',
+                            })
+                        except:
+                            pass
+                except:
+                    pass
+        except:
+            pass
 
-                result = json.loads(value)
-                ret_key = key.replace('result:', '')
-
-                job_info = {
-                    'ret_key': ret_key[:8],
-                    'ret_key_full': ret_key,
-                    'url': result.get('url', 'N/A'),
-                    'domain': result.get('domain', 'unknown'),
-                    'status': result.get('status', 'unknown'),
-                    'http_code': result.get('http_code', 0),
-                    'error': result.get('error', ''),
-                    'html_size': len(result.get('html', '')),
-                    'total_elapsed_seconds': result.get('total_elapsed_seconds', 0),
-                }
-
-                # Categorize by status
-                if result.get('status') == 'success':
-                    jobs_data['finished'].append(job_info)
-                else:
-                    jobs_data['failed'].append(job_info)
-
-            except json.JSONDecodeError:
-                logger.warning(f"Failed to parse JSON from {key}")
-                continue
-            except Exception as e:
-                logger.error(f"Error processing {key}: {e}")
-                continue
+        logger.info(f"result={len(seen_result)}, queued={len(jobs_data['queued'])}, running={len(jobs_data['running'])}")
 
         # Sort by ret_key (most recent last)
-        for status in ['queued', 'started', 'finished', 'failed']:
+        for status in ['queued', 'running', 'finished', 'failed']:
             jobs_data[status].sort(key=lambda x: x['ret_key_full'], reverse=True)
 
         logger.info(f"Returning: Queued={len(jobs_data['queued'])}, "
-                   f"Started={len(jobs_data['started'])}, "
+                   f"Running={len(jobs_data['running'])}, "
                    f"Finished={len(jobs_data['finished'])}, "
                    f"Failed={len(jobs_data['failed'])}")
 
@@ -565,10 +589,10 @@ def queue_stats_compat():
 
 @app.route('/api/clear_state/<state>', methods=['POST'])
 def clear_state(state):
-    """Clear all jobs in a specific state (queued, started, running)"""
+    """Clear all jobs in a specific state (queued, running, finished, failed)"""
     logger.info(f"Clearing {state} jobs...")
 
-    if state not in ['queued', 'started', 'running', 'finished']:
+    if state not in ['queued', 'running', 'finished', 'failed']:
         return jsonify({'error': 'Invalid state'}), 400
 
     try:
@@ -618,8 +642,25 @@ def clear_state(state):
                         pass
                 if cursor == 0:
                     break
+        elif state == 'failed':
+            # Clear from result:* keys where status != success
+            cursor = 0
+            while True:
+                cursor, keys = redis_conn.scan(cursor, match='result:*', count=100)
+                for key in keys:
+                    try:
+                        value = redis_conn.get(key)
+                        if value:
+                            result = json.loads(value)
+                            if result.get('status') != 'success':
+                                redis_conn.delete(key)
+                                deleted_count += 1
+                    except:
+                        pass
+                if cursor == 0:
+                    break
         else:
-            # Clear from job_state:* keys
+            # Clear from job_state:* keys (running)
             cursor = 0
             while True:
                 cursor, keys = redis_conn.scan(cursor, match='job_state:*', count=100)
@@ -678,6 +719,133 @@ def clear_failed():
     except Exception as e:
         logger.error(f"Error clearing failed jobs: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+def _extract_domain_from_url(url: str) -> str:
+    """Extract domain from URL (fnac, amazon, etc.)"""
+    from urllib.parse import urlparse
+    try:
+        domain = urlparse(url).netloc.lower()
+        # Extract domain name: fnac.com -> fnac, amazon.fr -> amazon
+        if 'fnac' in domain:
+            return 'fnac'
+        elif 'amazon' in domain:
+            return 'amazon'
+        else:
+            # Return base domain if no match
+            return domain.split('.')[0]
+    except:
+        return None
+
+
+@app.route('/api/submit-job', methods=['POST'])
+def submit_job():
+    """
+    API submit job từ external client (PHP server, etc.)
+
+    Request body (JSON):
+    {
+      "url": "https://www.fnac.com/product",
+      "mode": "none",
+      "proxy_type": "standard",
+      "ret_key": "client-generated-uuid"
+    }
+
+    Domain được extract từ URL để determine queue.
+
+    Response:
+    {
+      "ret_key": "uuid",
+      "status": "queued",
+      "message": "Job enqueued successfully"
+    }
+    """
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({'error': 'No JSON body provided'}), 400
+
+        url = data.get('url', '').strip()
+        mode = data.get('mode', 'none').strip()
+        proxy_type = data.get('proxy_type', 'standard').strip()
+        ret_key = data.get('ret_key', '').strip()
+
+        # Validate required fields
+        if not url:
+            return jsonify({'error': 'Missing required field: url'}), 400
+        if not ret_key:
+            return jsonify({'error': 'Missing required field: ret_key'}), 400
+
+        # Extract domain from URL
+        domain = _extract_domain_from_url(url)
+        if not domain:
+            return jsonify({'error': 'Cannot determine domain from URL'}), 400
+
+        # Validate proxy_type
+        valid_proxy_types = ['standard', 'none']
+        if proxy_type not in valid_proxy_types:
+            return jsonify({'error': f'Invalid proxy_type. Must be one of: {", ".join(valid_proxy_types)}'}), 400
+
+        # Enqueue to the appropriate domain queue (extracted from URL)
+        try:
+            import time as _time
+            queue_name = f'crawler:{domain}'
+            queue = Queue(queue_name, connection=redis_conn)
+
+            # Tạo job_state:* key để dashboard track được (giống test_batch.py)
+            job_state_data = {
+                'state': 'queued',
+                'ret_key': ret_key,
+                'url': url,
+                'domain': domain,
+                'proxy_type': proxy_type,
+                'timestamp': _time.time(),
+            }
+            redis_conn.set(f'job_state:{ret_key}', json.dumps(job_state_data), ex=86400)
+
+            # Enqueue the job - RQ will call 'main.crawl_job'
+            job = queue.enqueue(
+                'main.crawl_job',
+                url=url,
+                domain=domain,
+                ret_key=ret_key,
+                proxy_type=proxy_type,
+                job_timeout=600,
+                job_id=ret_key
+            )
+
+            logger.info(f"[API] Job submitted: ret_key={ret_key[:8]}, domain={domain}, mode={mode}, url={url[:60]}...")
+
+            return jsonify({
+                'ret_key': ret_key,
+                'ret_key_short': ret_key[:8],
+                'status': 'queued',
+                'message': 'Job enqueued successfully',
+                'domain': domain,
+                'mode': mode,
+                'url': url
+            }), 202
+
+        except Exception as e:
+            logger.error(f"[API] Error enqueuing job: {e}")
+            try:
+                redis_conn.delete(f'job_state:{ret_key}')
+                error_result = {
+                    'status': 'failed',
+                    'error': f'Enqueue failed: {str(e)}',
+                    'ret_key': ret_key,
+                    'url': url,
+                    'domain': domain,
+                }
+                redis_conn.set(f'result:{ret_key}', json.dumps(error_result), ex=3600)
+            except Exception:
+                pass
+            return jsonify({'error': f'Failed to enqueue job: {str(e)}'}), 500
+
+    except Exception as e:
+        logger.error(f"[API] Error in submit_job: {e}")
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
 @app.errorhandler(404)
