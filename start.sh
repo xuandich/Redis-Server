@@ -107,21 +107,30 @@ if [ -d "$WORKERS_DIR" ]; then
         if [ -d "$worker_dir" ] && [ -f "${worker_dir}Dockerfile" ]; then
             domain=$(basename "$worker_dir")
             image_name="worker-${domain}:latest"
+            cache_file="${worker_dir}worker-${domain}-latest.tar.gz"
 
             if docker image inspect "$image_name" > /dev/null 2>&1; then
                 echo "✅ $image_name already in system"
-            else
-                cache_file="$IMAGE_CACHE_DIR/worker-${domain}-latest.tar.gz"
-                if [ -f "$cache_file" ]; then
-                    echo "📂 Loading worker $domain from cache..."
-                    if docker load -i "$cache_file" > /dev/null 2>&1; then
-                        echo "✅ Loaded: $image_name"
-                    else
-                        echo "❌ Failed to load worker $domain"
-                    fi
+            elif [ -f "$cache_file" ]; then
+                echo "   📂 Loading worker $domain from cache..."
+                if docker load -i "$cache_file" > /dev/null 2>&1; then
+                    echo "   ✅ Loaded: $image_name"
                 else
-                    echo "📦 No cache found for worker $domain"
-                    echo "   Build manually: cd workers/$domain && docker build -t $image_name ."
+                    echo "   ❌ Failed to load, rebuilding..."
+                    if docker build -t "$image_name" "$worker_dir" > /dev/null 2>&1; then
+                        echo "   ✅ Built: $image_name"
+                        docker save "$image_name" | gzip > "$cache_file" && echo "   ✅ Cached: $(basename $cache_file)"
+                    else
+                        echo "   ❌ Failed to build: $image_name"
+                    fi
+                fi
+            else
+                echo "📦 $image_name not found — building..."
+                if docker build -t "$image_name" "$worker_dir" > /dev/null 2>&1; then
+                    echo "   ✅ Built: $image_name"
+                    docker save "$image_name" | gzip > "$cache_file" && echo "   ✅ Cached: $(basename $cache_file)"
+                else
+                    echo "   ❌ Failed to build: $image_name"
                 fi
             fi
         fi
@@ -160,5 +169,5 @@ else
     echo "🌐 Dashboard: http://localhost:5000"
     echo "📊 Redis: localhost:6379"
     echo ""
-    echo "Stop with: pkill -f 'docker compose'"
+    echo "Stop with: ./stop.sh"
 fi
