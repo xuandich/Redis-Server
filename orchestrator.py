@@ -3,90 +3,21 @@ RQ Orchestrator - Auto-discover domains and spawn worker threads
 
 Architecture:
   - Scan workers/ folder for domain directories (with Dockerfile)
-  - For each domain: create RQ worker thread listening to crawler:{domain} queue
-  - Dynamically spawn workers on-demand per job
-  - Per-domain concurrency limit (configurable via .env)
+  - For each domain: spawn MAX_CONCURRENT_{DOMAIN} SimpleWorker threads
+  - SimpleWorker runs jobs in-process (no fork) — thread-safe, no zombie, no deadlock
+  - Per-domain concurrency = number of worker threads; global limit via slot counter
 """
 
-import os
 import sys
 import time
-import json
-import threading
 from pathlib import Path
 from threading import Thread
-from rq import Worker, Queue
+from rq import SimpleWorker, Queue
 import redis as redis_lib
 
-from config import REDIS_HOST, REDIS_PORT, get_max_concurrent, MAX_CONCURRENT_TOTAL, RESULT_TTL
+from config import REDIS_HOST, REDIS_PORT, get_max_concurrent, MAX_CONCURRENT_TOTAL
 
 redis_client = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
-
-# Registry: pid → {ret_key, domain, url} cho zombie reaper
-_horse_registry: dict = {}
-_horse_registry_lock = threading.Lock()
-
-
-def _register_horse(pid: int, ret_key: str, domain: str, url: str):
-    with _horse_registry_lock:
-        _horse_registry[pid] = {'ret_key': ret_key, 'domain': domain, 'url': url}
-
-
-def _release_slot_reaper(slot_type: str, key: str):
-    """DECR slot counter — dùng khi horse bị kill và finally không chạy được"""
-    redis_key = f"slots:{slot_type}:{key}".encode()
-    val = redis_client.decr(redis_key)
-    if val < 0:
-        redis_client.set(redis_key, 0)
-
-
-def _handle_horse_failure(pid: int, info: dict):
-    """Horse bị SIGKILL hoặc exit != 0: ghi error result, release slots, xóa job_state"""
-    ret_key = info['ret_key']
-    domain  = info['domain']
-    url     = info.get('url', '')
-
-    error_result = {
-        'status': 'failed',
-        'error': 'Worker process killed (OOM or external signal)',
-        'ret_key': ret_key,
-        'domain': domain,
-        'url': url,
-    }
-    redis_client.setex(f'result:{ret_key}'.encode(), RESULT_TTL,
-                       json.dumps(error_result, ensure_ascii=False).encode())
-    redis_client.delete(f'job_state:{ret_key}'.encode())
-    _release_slot_reaper('domain', domain)
-    _release_slot_reaper('global', 'total')
-    print(f"[Reaper] Horse PID={pid} ({ret_key[:8]}) killed — marked failed, slots released", flush=True)
-
-
-def _reaper_loop():
-    """Background thread: reap zombie horse processes bằng waitpid(-1, WNOHANG)"""
-    while True:
-        try:
-            while True:
-                pid, raw_status = os.waitpid(-1, os.WNOHANG)
-                if pid == 0:
-                    break  # không còn zombie nào
-
-                with _horse_registry_lock:
-                    info = _horse_registry.pop(pid, None)
-
-                if info is None:
-                    continue  # child không rõ nguồn gốc, reap xong bỏ qua
-
-                if os.WIFSIGNALED(raw_status) or (os.WIFEXITED(raw_status) and os.WEXITSTATUS(raw_status) != 0):
-                    _handle_horse_failure(pid, info)
-                else:
-                    print(f"[Reaper] Horse PID={pid} ({info['ret_key'][:8]}) exited cleanly", flush=True)
-
-        except ChildProcessError:
-            pass  # không có child nào, bình thường
-        except Exception as e:
-            print(f"[Reaper] Error: {e}", flush=True)
-
-        time.sleep(0.5)
 
 
 def _can_acquire_slots(domain: str) -> bool:
@@ -107,9 +38,11 @@ def _can_acquire_slots(domain: str) -> bool:
         return True  # On error, assume slots available
 
 
-class ThreadSafeWorker(Worker):
-    """Worker safe for spawned threads - skips signal handlers
-    Checks slots BEFORE picking job (phương án 1)
+class ThreadSafeWorker(SimpleWorker):
+    """SimpleWorker safe for threads — không fork, không zombie, không deadlock.
+
+    Mỗi instance xử lý 1 job tại 1 thời điểm. Concurrency đạt được bằng cách
+    chạy MAX_CONCURRENT_{DOMAIN} instances song song cho mỗi domain.
     """
     def __init__(self, *args, domain=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -119,23 +52,13 @@ class ThreadSafeWorker(Worker):
         """Skip signal installation - safe for threads"""
         pass
 
-    def monitor_work_horse(self, job, _queue):
-        """Register horse PID vào reaper registry — non-blocking (không waitpid ở đây)"""
-        url = job.args[0] if job.args else ''
-        _register_horse(self.horse_pid, job.id, self.domain, url)
-
     def dequeue_job_and_maintain_ttl(self, timeout, max_idle_time=None):
-        """Override để check slots TRƯỚC khi dequeue
-
-        Nếu slots full → sleep + heartbeat (không pick job, worker không die)
-        Nếu slots available → dequeue bình thường
-        """
+        """Check slots TRƯỚC khi dequeue — nếu full thì sleep + heartbeat"""
         while not _can_acquire_slots(self.domain):
             time.sleep(1)
-            self.heartbeat()  # Giữ worker alive trong Redis
+            self.heartbeat()
 
         return super().dequeue_job_and_maintain_ttl(timeout, max_idle_time)
-
 
 
 def discover_worker_domains():
@@ -156,31 +79,21 @@ def discover_worker_domains():
     return sorted(domains)
 
 
-def start_worker_for_domain(domain):
-    """RQ Worker for a specific domain - listens to crawler:{domain} queue
-
-    Worker config:
-    - default_result_ttl: 3600 (keep result 1 hour)
-    - job_monitoring_interval: 5 (check job health every 5s)
-    - Concurrency: Limited by MAX_CONCURRENT_{DOMAIN} from .env
-    """
+def start_worker_for_domain(domain, worker_index):
+    """Một SimpleWorker instance cho domain — blocking loop xử lý jobs tuần tự"""
     queue_name = f'crawler:{domain}'
     queue = Queue(queue_name, connection=redis_client)
-
-    max_concurrent = get_max_concurrent(domain)
 
     worker = ThreadSafeWorker(
         [queue],
         connection=redis_client,
-        name=f'worker-{domain}',
+        name=f'worker-{domain}-{worker_index}',
         default_result_ttl=3600,
         job_monitoring_interval=5,
-        domain=domain,  # Pass domain để check slots
+        domain=domain,
     )
 
-    print(f"[{domain.upper()} Worker] Listening to queue: {queue_name}")
-    print(f"  - Max concurrent jobs: {max_concurrent}")
-    print(f"  - Slot checking: ✅ Enabled (check BEFORE pick)")
+    print(f"[{domain.upper()}] Worker-{worker_index} listening on {queue_name}", flush=True)
     worker.work()
 
 
@@ -229,7 +142,6 @@ def _retry_stale_jobs():
                     rq_job = RQJob.fetch(ret_key, connection=redis_client)
                     job_status = rq_job.get_status()
                     if job_status == 'queued':
-                        # Still waiting in queue — giữ job_state để dashboard vẫn track được
                         skipped += 1
                         continue
                     elif job_status in ('finished', 'failed'):
@@ -237,7 +149,6 @@ def _retry_stale_jobs():
                         skipped += 1
                         continue
                     else:
-                        # Worker picked it up but was killed — xóa RQ job hash để re-enqueue
                         try:
                             rq_job.delete()
                         except Exception:
@@ -245,12 +156,11 @@ def _retry_stale_jobs():
                 except NoSuchJobError:
                     pass  # Job lost entirely → re-enqueue
 
-                redis_client.delete(key)  # Xóa job_state cũ trước khi re-enqueue
+                redis_client.delete(key)
                 import main as crawler_main
                 q = Queue(f'crawler:{domain}', connection=redis_client)
                 q.enqueue(crawler_main.crawl_job, url, domain, ret_key, proxy_type,
                           job_timeout=600, job_id=ret_key)
-                # Tạo lại job_state để dashboard track được ngay
                 import json as _json, time as _time
                 redis_client.setex(f'job_state:{ret_key}', 86400, _json.dumps({
                     'state': 'queued',
@@ -273,14 +183,15 @@ def _retry_stale_jobs():
 
 def cleanup_stale_workers(domains):
     """Remove stale worker registrations and slot counters from previous crashes"""
-    for domain in domains:
-        worker_key = f'rq:worker:worker-{domain}'
-        try:
-            if redis_client.exists(worker_key):
-                redis_client.delete(worker_key)
-                print(f"[Cleanup] Removed stale worker: worker-{domain}")
-        except Exception:
-            pass
+    # Xóa tất cả rq:worker:* (tên worker thay đổi qua các lần restart)
+    cursor = 0
+    while True:
+        cursor, keys = redis_client.scan(cursor, match=b'rq:worker:*', count=100)
+        for key in keys:
+            redis_client.delete(key)
+            print(f"[Cleanup] Removed stale worker: {key.decode()}")
+        if cursor == 0:
+            break
 
     # Reset slot counters — any leftover slots are stale after restart
     cursor = 0
@@ -292,7 +203,6 @@ def cleanup_stale_workers(domains):
         if cursor == 0:
             break
 
-    # Re-enqueue stale running jobs — they were dequeued by RQ before crash, lost from queue
     _retry_stale_jobs()
 
 
@@ -309,22 +219,23 @@ def start_orchestrator():
         print("[Warning] No worker domains found in workers/")
         return
 
-    # Clean up stale workers from previous crashes
     cleanup_stale_workers(domains)
 
-    # Start zombie reaper thread
-    reaper = Thread(target=_reaper_loop, daemon=True, name='zombie-reaper')
-    reaper.start()
-    print("[Reaper] Zombie reaper started")
-
-    # Start worker thread for each domain
+    # Spawn MAX_CONCURRENT_{DOMAIN} worker threads per domain
     threads = []
     for domain in domains:
-        thread = Thread(target=start_worker_for_domain, args=(domain,), daemon=True)
-        thread.start()
-        threads.append(thread)
+        max_concurrent = get_max_concurrent(domain)
+        print(f"[{domain.upper()}] Starting {max_concurrent} worker threads")
+        for i in range(max_concurrent):
+            thread = Thread(
+                target=start_worker_for_domain,
+                args=(domain, i),
+                daemon=True,
+                name=f'worker-{domain}-{i}',
+            )
+            thread.start()
+            threads.append(thread)
 
-    # Keep main thread alive
     try:
         for thread in threads:
             thread.join()
