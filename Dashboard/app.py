@@ -179,6 +179,7 @@ def get_jobs_by_state(state):
                                 'error': result.get('error', ''),
                                 'total_elapsed_seconds': result.get('total_elapsed_seconds', 0),
                                 'html_size': len(result.get('html', '')),
+                                'timestamp': result.get('timestamp', 0),
                             })
                     except:
                         pass
@@ -261,6 +262,7 @@ def get_jobs():
                         'error': result.get('error', ''),
                         'html_size': len(result.get('html', '')),
                         'total_elapsed_seconds': result.get('total_elapsed_seconds', 0),
+                        'timestamp': result.get('timestamp', 0),
                     }
                     if result.get('status') == 'success':
                         jobs_data['finished'].append(job_info)
@@ -353,9 +355,9 @@ def get_jobs():
 
         logger.info(f"result={len(seen_result)}, queued={len(jobs_data['queued'])}, running={len(jobs_data['running'])}")
 
-        # Sort by ret_key (most recent last)
+        # Sort by timestamp (newest first)
         for status in ['queued', 'running', 'finished', 'failed']:
-            jobs_data[status].sort(key=lambda x: x['ret_key_full'], reverse=True)
+            jobs_data[status].sort(key=lambda x: x.get('timestamp', 0), reverse=True)
 
         logger.info(f"Returning: Queued={len(jobs_data['queued'])}, "
                    f"Running={len(jobs_data['running'])}, "
@@ -599,16 +601,18 @@ def clear_state(state):
         deleted_count = 0
 
         if state == 'queued':
-            # Clear actual RQ queues
+            deleted_keys = set()
+            # Clear actual RQ queues — track ret_keys removed
+            # rq:queues set chứa tên queue trực tiếp (ví dụ 'crawler:fnac')
             raw_keys = redis_conn.smembers('rq:queues') or set()
-            queue_names = {k.replace('rq:queue:', '', 1) for k in raw_keys}
+            queue_names = set(raw_keys)
             for queue_name in queue_names:
                 try:
                     q = Queue(queue_name, connection=redis_conn)
-                    count = len(q.get_job_ids())
+                    for jid in q.get_job_ids():
+                        deleted_keys.add(jid)
                     q.empty()
-                    deleted_count += count
-                    logger.info(f"Emptied queue {queue_name}: {count} jobs")
+                    logger.info(f"Emptied queue {queue_name}: {len(deleted_keys)} jobs")
                 except Exception as e:
                     logger.warning(f"Error clearing queue {queue_name}: {e}")
             # Also clear job_state:* keys with state='queued'
@@ -620,11 +624,12 @@ def clear_state(state):
                         value = redis_conn.get(key)
                         if value and json.loads(value).get('state') == 'queued':
                             redis_conn.delete(key)
-                            deleted_count += 1
+                            deleted_keys.add(key.split('job_state:', 1)[-1])
                     except:
                         pass
                 if cursor == 0:
                     break
+            deleted_count = len(deleted_keys)
         elif state == 'finished':
             # Clear from result:* keys where status == success
             cursor = 0

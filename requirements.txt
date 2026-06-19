@@ -5,5 +5,4 @@ psutil>=7.2.2
 redis>=8.0.0
 requests>=2.34.2
 rich>=15.0.0
-rq-dashboard>=0.15.0
 rq>=2.9.1

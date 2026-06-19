@@ -27,7 +27,7 @@ return 0
 """
 
 
-def _acquire_slot(slot_type: str, key: str, max_slots: int, timeout: int = 300) -> bool:
+def _acquire_slot(slot_type: str, key: str, max_slots: int, timeout: int = 60) -> bool:
     """Acquire a slot using Lua script (atomic, cross-process safe)"""
     redis_key = f"slots:{slot_type}:{key}"
     start_time = time.time()
@@ -96,7 +96,6 @@ def crawl_job(url: str, domain: str, ret_key: str, proxy_type: str = 'standard')
         try:
             print(f"[CRAWL_JOB] {domain} {job_id} - ACQUIRED SLOTS, spawning container...", flush=True)
             result = _spawn_and_wait_container(url, domain, ret_key, proxy_type)
-            redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(result, ensure_ascii=False, default=str))
             _clear_job_state(ret_key)
             print(f"[CRAWL_JOB] {domain} {job_id} - CONTAINER DONE", flush=True)
             return result
@@ -163,18 +162,22 @@ def _spawn_and_wait_container(url: str, domain: str, ret_key: str, proxy_type: s
             pass
         error_result = {
             'url': url, 'ret_key': ret_key, 'domain': domain,
-            'error': f'Container timeout/error: {str(e)}', 'status': 'failed'
+            'error': f'Container timeout/error: {str(e)}', 'status': 'failed',
+            'timestamp': time.time(),
         }
         redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
         return error_result
 
     result = redis_client.get(f"result:{ret_key}")
     if result:
-        return json.loads(result)
+        result_dict = json.loads(result)
+        result_dict.setdefault('timestamp', time.time())
+        return result_dict
 
     error_result = {
         'url': url, 'ret_key': ret_key, 'domain': domain,
-        'error': 'No result from container', 'status': 'failed'
+        'error': 'No result from container', 'status': 'failed',
+        'timestamp': time.time(),
     }
     redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
     return error_result

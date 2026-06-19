@@ -45,7 +45,7 @@ workers/Proxy/
 !workers/Proxy/.gitkeep
 
 # Documentation
-Mo_Ta.txt
+Mo_Ta.md
 
 # Bug reports
 Bugs/

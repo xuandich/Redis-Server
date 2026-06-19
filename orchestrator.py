@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from threading import Thread
 from rq import SimpleWorker, Queue
+from rq.timeouts import TimerDeathPenalty
 import redis as redis_lib
 
 from config import REDIS_HOST, REDIS_PORT, get_max_concurrent, MAX_CONCURRENT_TOTAL
@@ -35,7 +36,7 @@ def _can_acquire_slots(domain: str) -> bool:
         return True
     except Exception as e:
         print(f"[ERROR] Slot check failed: {e}", flush=True)
-        return True  # On error, assume slots available
+        return False  # Fail-closed: không dequeue khi Redis không ổn định
 
 
 class ThreadSafeWorker(SimpleWorker):
@@ -44,6 +45,10 @@ class ThreadSafeWorker(SimpleWorker):
     Mỗi instance xử lý 1 job tại 1 thời điểm. Concurrency đạt được bằng cách
     chạy MAX_CONCURRENT_{DOMAIN} instances song song cho mỗi domain.
     """
+    # UnixSignalDeathPenalty dùng SIGALRM, chỉ hoạt động trên main thread.
+    # TimerDeathPenalty dùng threading.Timer — thread-safe.
+    death_penalty_class = TimerDeathPenalty
+
     def __init__(self, *args, domain=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.domain = domain
@@ -105,6 +110,8 @@ def _retry_stale_jobs():
     Queued jobs never picked by RQ survive in the queue via Redis AOF (docker compose stop).
     """
     import json
+    import time
+    import main as crawler_main
     from rq.job import Job as RQJob
     from rq.exceptions import NoSuchJobError
 
@@ -157,18 +164,16 @@ def _retry_stale_jobs():
                     pass  # Job lost entirely → re-enqueue
 
                 redis_client.delete(key)
-                import main as crawler_main
                 q = Queue(f'crawler:{domain}', connection=redis_client)
                 q.enqueue(crawler_main.crawl_job, url, domain, ret_key, proxy_type,
                           job_timeout=600, job_id=ret_key)
-                import json as _json, time as _time
-                redis_client.setex(f'job_state:{ret_key}', 86400, _json.dumps({
+                redis_client.setex(f'job_state:{ret_key}', 86400, json.dumps({
                     'state': 'queued',
                     'ret_key': ret_key,
                     'url': url,
                     'domain': domain,
                     'proxy_type': proxy_type,
-                    'timestamp': _time.time(),
+                    'timestamp': time.time(),
                 }))
                 retried += 1
                 print(f"[Retry] Re-enqueued {ret_key[:8]} ({domain}): {url[:70]}")
