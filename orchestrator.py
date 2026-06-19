@@ -8,16 +8,85 @@ Architecture:
   - Per-domain concurrency limit (configurable via .env)
 """
 
+import os
 import sys
 import time
+import json
+import threading
 from pathlib import Path
 from threading import Thread
 from rq import Worker, Queue
 import redis as redis_lib
 
-from config import REDIS_HOST, REDIS_PORT, get_max_concurrent, MAX_CONCURRENT_TOTAL
+from config import REDIS_HOST, REDIS_PORT, get_max_concurrent, MAX_CONCURRENT_TOTAL, RESULT_TTL
 
 redis_client = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
+
+# Registry: pid → {ret_key, domain, url} cho zombie reaper
+_horse_registry: dict = {}
+_horse_registry_lock = threading.Lock()
+
+
+def _register_horse(pid: int, ret_key: str, domain: str, url: str):
+    with _horse_registry_lock:
+        _horse_registry[pid] = {'ret_key': ret_key, 'domain': domain, 'url': url}
+
+
+def _release_slot_reaper(slot_type: str, key: str):
+    """DECR slot counter — dùng khi horse bị kill và finally không chạy được"""
+    redis_key = f"slots:{slot_type}:{key}".encode()
+    val = redis_client.decr(redis_key)
+    if val < 0:
+        redis_client.set(redis_key, 0)
+
+
+def _handle_horse_failure(pid: int, info: dict):
+    """Horse bị SIGKILL hoặc exit != 0: ghi error result, release slots, xóa job_state"""
+    ret_key = info['ret_key']
+    domain  = info['domain']
+    url     = info.get('url', '')
+
+    error_result = {
+        'status': 'failed',
+        'error': 'Worker process killed (OOM or external signal)',
+        'ret_key': ret_key,
+        'domain': domain,
+        'url': url,
+    }
+    redis_client.setex(f'result:{ret_key}'.encode(), RESULT_TTL,
+                       json.dumps(error_result, ensure_ascii=False).encode())
+    redis_client.delete(f'job_state:{ret_key}'.encode())
+    _release_slot_reaper('domain', domain)
+    _release_slot_reaper('global', 'total')
+    print(f"[Reaper] Horse PID={pid} ({ret_key[:8]}) killed — marked failed, slots released", flush=True)
+
+
+def _reaper_loop():
+    """Background thread: reap zombie horse processes bằng waitpid(-1, WNOHANG)"""
+    while True:
+        try:
+            while True:
+                pid, raw_status = os.waitpid(-1, os.WNOHANG)
+                if pid == 0:
+                    break  # không còn zombie nào
+
+                with _horse_registry_lock:
+                    info = _horse_registry.pop(pid, None)
+
+                if info is None:
+                    continue  # child không rõ nguồn gốc, reap xong bỏ qua
+
+                if os.WIFSIGNALED(raw_status) or (os.WIFEXITED(raw_status) and os.WEXITSTATUS(raw_status) != 0):
+                    _handle_horse_failure(pid, info)
+                else:
+                    print(f"[Reaper] Horse PID={pid} ({info['ret_key'][:8]}) exited cleanly", flush=True)
+
+        except ChildProcessError:
+            pass  # không có child nào, bình thường
+        except Exception as e:
+            print(f"[Reaper] Error: {e}", flush=True)
+
+        time.sleep(0.5)
 
 
 def _can_acquire_slots(domain: str) -> bool:
@@ -50,9 +119,10 @@ class ThreadSafeWorker(Worker):
         """Skip signal installation - safe for threads"""
         pass
 
-    def monitor_work_horse(self, _job, _queue):
-        """Skip death penalty monitoring - safe for threads"""
-        pass
+    def monitor_work_horse(self, job, _queue):
+        """Register horse PID vào reaper registry — non-blocking (không waitpid ở đây)"""
+        url = job.args[0] if job.args else ''
+        _register_horse(self.horse_pid, job.id, self.domain, url)
 
     def dequeue_job_and_maintain_ttl(self, timeout, max_idle_time=None):
         """Override để check slots TRƯỚC khi dequeue
@@ -241,6 +311,11 @@ def start_orchestrator():
 
     # Clean up stale workers from previous crashes
     cleanup_stale_workers(domains)
+
+    # Start zombie reaper thread
+    reaper = Thread(target=_reaper_loop, daemon=True, name='zombie-reaper')
+    reaper.start()
+    print("[Reaper] Zombie reaper started")
 
     # Start worker thread for each domain
     threads = []
