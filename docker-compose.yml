@@ -16,6 +16,11 @@ services:
       - redis-data:/data
     command: redis-server --appendonly yes
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   orchestrator:
     build: .
@@ -31,7 +36,8 @@ services:
       CRAWLER_NETWORK: ${CRAWLER_NETWORK}
       PROXY_HOST_DIR: ${PROXY_HOST_DIR}
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   dashboard:
@@ -49,7 +55,8 @@ services:
       DASHBOARD_PORT: 5000
       DEBUG: "False"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

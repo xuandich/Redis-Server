@@ -211,8 +211,23 @@ def cleanup_stale_workers(domains):
     _retry_stale_jobs()
 
 
+def _wait_for_redis(max_retries: int = 30, delay: int = 2):
+    """Wait until Redis is reachable before starting"""
+    for i in range(max_retries):
+        try:
+            redis_client.ping()
+            print("[Orchestrator] Redis ready", flush=True)
+            return
+        except Exception as e:
+            print(f"[Orchestrator] Waiting for Redis ({i + 1}/{max_retries}): {e}", flush=True)
+            time.sleep(delay)
+    raise RuntimeError("Redis not available after retries — aborting")
+
+
 def start_orchestrator():
     """Auto-discover domains and start worker threads for each"""
+    _wait_for_redis()
+
     domains = discover_worker_domains()
 
     print("=" * 60)

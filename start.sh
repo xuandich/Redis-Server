@@ -16,6 +16,14 @@ fi
 
 REDIS_PORT=${REDIS_PORT:-6379}
 
+# Stop any container holding REDIS_PORT (outside this compose project)
+CONFLICT_CONTAINER=$(docker ps --format '{{.Names}}' --filter "publish=$REDIS_PORT" 2>/dev/null | grep -v '^redis-server$')
+if [ -n "$CONFLICT_CONTAINER" ]; then
+    echo "⚠️  Port $REDIS_PORT already used by: $CONFLICT_CONTAINER — stopping it..."
+    docker stop $CONFLICT_CONTAINER > /dev/null 2>&1
+    echo "   ✅ Stopped $CONFLICT_CONTAINER"
+fi
+
 # Check Proxy directory
 if [ ! -d "$PROXY_DIR" ]; then
     echo "❌ Proxy directory not found: $PROXY_DIR"
@@ -91,12 +99,12 @@ echo "🔍 Checking Docker images..."
 load_or_build_image "redis_server-orchestrator:latest" "orchestrator"
 load_or_build_image "redis_server-dashboard:latest" "dashboard"
 
-# Load worker images from workers directory
+# Load worker images from workers directory (only dirs with Dockerfile)
 echo "🔍 Checking worker Docker images..."
 WORKERS_DIR="$PROJECT_ROOT/workers"
 if [ -d "$WORKERS_DIR" ]; then
     for worker_dir in "$WORKERS_DIR"/*/; do
-        if [ -d "$worker_dir" ]; then
+        if [ -d "$worker_dir" ] && [ -f "${worker_dir}Dockerfile" ]; then
             domain=$(basename "$worker_dir")
             image_name="worker-${domain}:latest"
 
@@ -113,7 +121,7 @@ if [ -d "$WORKERS_DIR" ]; then
                     fi
                 else
                     echo "📦 No cache found for worker $domain"
-                    echo "   (Build it separately with: docker compose build worker-$domain)"
+                    echo "   Build manually: cd workers/$domain && docker build -t $image_name ."
                 fi
             fi
         fi
@@ -138,10 +146,10 @@ fi
 if [ "$QUIET_MODE" = false ]; then
     echo "🚀 Starting services (foreground mode)..."
     echo ""
-    docker compose up
+    docker compose up --no-build
 else
     # Background quiet mode (with -quiet flag)
-    docker compose up > /dev/null 2>&1 &
+    docker compose up --no-build > /dev/null 2>&1 &
     DOCKER_PID=$!
     echo "✅ Containers started in background (PID: $DOCKER_PID)"
 
