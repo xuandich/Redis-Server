@@ -35,7 +35,6 @@ async def process_single_request(request: Dict[str, Any], semaphore: Semaphore) 
         proxies = []
         if proxy_type == 'standard':
             proxies = load_proxies_from_excel()
-            # Nếu không có proxy, vẫn chạy direct
 
         fetcher = FnacHtmlFetcher(
             proxy_list=proxies,
@@ -59,9 +58,9 @@ async def process_single_request(request: Dict[str, Any], semaphore: Semaphore) 
             result_dict = results[0].to_dict()
             result_dict['ret_key'] = ret_key
             result_dict['total_elapsed_seconds'] = elapsed
-            # Giữ lại mode, proxy_type nếu cần
             result_dict['mode'] = request.get('mode', 'none')
             result_dict['proxy_type'] = proxy_type
+            result_dict['log'] = fetcher.log_buffer
             return result_dict
         except Exception as e:
             return {
@@ -69,7 +68,8 @@ async def process_single_request(request: Dict[str, Any], semaphore: Semaphore) 
                 'url': url,
                 'error': str(e),
                 'status': 'failed',
-                'total_elapsed_seconds': time.time() - start_time
+                'total_elapsed_seconds': time.time() - start_time,
+                'log': fetcher.log_buffer,
             }
         finally:
             await fetcher.close_browser()

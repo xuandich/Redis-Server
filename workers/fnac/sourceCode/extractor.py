@@ -65,7 +65,6 @@ class FnacHtmlFetcher:
         self.failed_count = 0
         self.proxies = proxy_list.copy()
         random.shuffle(self.proxies)
-        self.current_proxy_index = 0
         self.requests_per_proxy = 20
         self.request_count_per_proxy = 0
         self.current_proxy = None
@@ -78,8 +77,10 @@ class FnacHtmlFetcher:
         self.total_keys = 0
         self.current_key = ""
         self.chromium_path = os.environ.get('CHROMIUM_PATH') or None
-    
+        self.log_buffer: List[str] = []
+
     def add_log(self, message: str):
+        self.log_buffer.append(message)
         if self.display_manager:
             self.display_manager.add_log(self.worker_id, message)
         else:
@@ -242,8 +243,6 @@ class FnacHtmlFetcher:
         if not self.proxies:
             return False
         self.current_proxy = self.get_next_proxy()
-        masked = mask_proxy_password(self.current_proxy) if self.current_proxy else "None"
-        self.add_log(f"🔄 Xoay proxy ngẫu nhiên → {masked}")
         success = await self.start_browser_with_proxy(self.current_proxy)
         if success:
             self.request_count_per_proxy = 0
@@ -253,8 +252,9 @@ class FnacHtmlFetcher:
     def get_next_proxy(self) -> Optional[str]:
         if not self.proxies:
             return None
-        self.current_proxy_index = random.randint(0, len(self.proxies) - 1)
-        return self.proxies[self.current_proxy_index]
+        proxy = random.choice(self.proxies)
+        self.add_log(f"🔀 Chọn ngẫu nhiên proxy: {mask_proxy_password(proxy)}")
+        return proxy
     
     def build_url(self, key: str) -> str:
         return key if key.startswith('http') else f"https://www.fnac.com/{key}"
@@ -277,10 +277,13 @@ class FnacHtmlFetcher:
                 result.cookies = {c['name']: c['value'] for c in cookies_list}
                 elapsed_ms = (time.time() - request_start) * 1000
                 result.elapsed_ms = elapsed_ms
-                if result.http_code == 403 and attempt < max_retries - 1:
-                    self.add_log(f"⚠️ HTTP 403 lần {attempt+1}, giữ cookie retry sau 5s...")
-                    await asyncio.sleep(5)
-                    continue
+                if result.http_code == 403:
+                    if attempt < max_retries - 1:
+                        self.add_log(f"⚠️ HTTP 403 lần {attempt+1}, giữ cookie retry sau 5s...")
+                        await asyncio.sleep(5)
+                        continue
+                    result.mark_failed('HTTP 403 Forbidden')
+                    return result
                 result.mark_success(result.html, result.headers, result.http_code, result.cookies, elapsed_ms)
                 return result
             except Exception as e:
@@ -315,7 +318,7 @@ class FnacHtmlFetcher:
             else:
                 self.failed_count += 1
                 self.request_count_per_proxy += 1
-                self.add_log(f"❌ THẤT BẠI #{index}: {result.error[:100]}")
+                self.add_log(f"❌ THẤT BẠI #{index}: {(result.error or 'unknown error')[:100]}")
         except Exception as e:
             result.mark_failed(str(e))
             self.failed_count += 1
@@ -369,10 +372,18 @@ class FnacHtmlFetcher:
         retry_count = 0
         while current_keys and retry_count <= max_retries:
             if retry_count > 0:
+                if not self.proxies:
+                    self.add_log(f"❌ Không có proxy để retry — dừng lại")
+                    existing_urls = {r.url for r in all_results}
+                    for key in current_keys:
+                        url = self.build_url(key)
+                        if url not in existing_urls:
+                            r = HtmlFetchResult(url, self.worker_id)
+                            r.mark_failed('No proxy available')
+                            all_results.append(r)
+                    return all_results
                 self.add_log(f"🔄 LẦN THỬ {retry_count}: Retry {len(current_keys)} URL thất bại...")
                 await asyncio.sleep(10)
-                if self.browser:
-                    await self.restart_browser_with_new_proxy()
             results = await self.process_keys(current_keys)
             success_results = [r for r in results if r.status == 'success']
             failed_results = [r for r in results if r.status == 'failed']
@@ -380,7 +391,6 @@ class FnacHtmlFetcher:
             current_keys = [r.url for r in failed_results]
             retry_count += 1
             self.add_log(f"📊 Lần {retry_count}: Thành công: {len(success_results)}, Thất bại: {len(failed_results)}")
-        # KHÔNG LƯU FILE JSON
         if current_keys:
             self.add_log(f"⚠️ {len(current_keys)} URL vẫn thất bại sau {max_retries} lần retry")
             existing_urls = {r.url for r in all_results}
