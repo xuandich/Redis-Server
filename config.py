@@ -23,7 +23,7 @@ CHROMIUM_PATH_IN_CONTAINER = '/snap/chromium/current/usr/lib/chromium-browser/ch
 
 # ========== Job Configuration (from .env) ==========
 RESULT_TTL = int(os.environ.get('RESULT_TTL', 3600))
-JOB_TIMEOUT = int(os.environ.get('JOB_TIMEOUT', 120))
+JOB_TIMEOUT_DEFAULT = int(os.environ.get('JOB_TIMEOUT_DEFAULT', 120))
 CONTAINER_MEM_LIMIT = os.environ.get('CONTAINER_MEM_LIMIT', '1g')
 CONTAINER_SHM_SIZE = os.environ.get('CONTAINER_SHM_SIZE', '2g')
 
@@ -40,9 +40,14 @@ def get_max_concurrent(domain: str) -> int:
     """Get max concurrent jobs for a specific domain"""
     return int(os.environ.get(f'MAX_CONCURRENT_{domain.upper()}', 5))
 
+def get_job_timeout(domain: str) -> int:
+    """Get job timeout for a specific domain, fallback to JOB_TIMEOUT_DEFAULT"""
+    return int(os.environ.get(f'JOB_TIMEOUT_{domain.upper()}', JOB_TIMEOUT_DEFAULT))
+
 # ========== Queues ==========
 QUEUE_FNAC = 'crawler:fnac'
 QUEUE_AMAZON = 'crawler:amazon'
+QUEUE_NEWARK = 'crawler:newark'
 
 # ========== Proxy Configuration ==========
 PROXY_TYPE_STANDARD = 'standard'

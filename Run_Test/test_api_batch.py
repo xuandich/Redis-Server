@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """
 Batch test script via API: Load URLs từ Excel và gửi N requests qua HTTP
-Usage: python test_api_batch.py [num_requests] [proxy_type]
-  num_requests: số requests (default: 100)
+Usage: python test_api_batch.py [num_requests] [domain] [proxy_type]
+  num_requests: số requests (default: 10)
+  domain: 'fnac' (default), 'newark', 'amazon', ...
   proxy_type: 'standard' (default) hoặc 'none'
 
+ret_key format: ret_{domain}_{uuid}  (ví dụ: ret_newark_550e8400-...)
+
 Features:
-  - Load URLs from TEST_FILE/fnac_urls.xlsx (same as test_batch.py)
-  - Send N random requests via HTTP API (simulating PHP client)
+  - Load URLs từ TEST_FILE/{domain}_urls.xlsx
+  - Send N random requests via HTTP API
   - Monitor realtime with results
   - Save results to JSON
 """
 
+import os
 import pandas as pd
 import requests
 import json
@@ -25,14 +29,15 @@ REDIS_API_URL = 'http://localhost:5000/api/submit-job'
 RESULT_POLL_URL = 'http://localhost:5000/api/job'
 
 # Parameters
-num_requests = int(sys.argv[1]) if len(sys.argv) > 1 else 100
-proxy_type = sys.argv[2] if len(sys.argv) > 2 else 'standard'
+num_requests = int(sys.argv[1]) if len(sys.argv) > 1 else 10
+domain = sys.argv[2] if len(sys.argv) > 2 else 'fnac'
+proxy_type = sys.argv[3] if len(sys.argv) > 3 else 'standard'
 
-# Load URLs from Excel (same as test_batch.py)
-print("📂 Loading URLs from TEST_FILE/fnac_urls.xlsx...")
+# Load URLs from Excel
+xlsx_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'TEST_FILE', f'{domain}_urls.xlsx')
+print(f"📂 Loading URLs from TEST_FILE/{domain}_urls.xlsx...")
 try:
-    df = pd.read_excel('TEST_FILE/fnac_urls.xlsx')
-    # Assume first column contains URLs
+    df = pd.read_excel(xlsx_path, header=None)
     all_urls = df.iloc[:, 0].dropna().tolist()
     print(f"✅ Loaded {len(all_urls)} URLs")
 except Exception as e:
@@ -48,6 +53,7 @@ else:
     selected_urls = random.sample(all_urls, num_requests)
 
 print(f"\n📊 Test Configuration:")
+print(f"  Domain: {domain}")
 print(f"  Proxy: {proxy_type}")
 print(f"  Requests: {num_requests}")
 print(f"  API URL: {REDIS_API_URL}")
@@ -60,7 +66,7 @@ start_time = time.time()
 
 print(f"\n🚀 Submitting {num_requests} jobs via API...\n")
 for i, url in enumerate(selected_urls, 1):
-    ret_key = str(uuid.uuid4())
+    ret_key = f"ret_{domain}_{uuid.uuid4()}"
 
     payload = {
         'url': url,
@@ -170,14 +176,15 @@ if http_codes:
 
 # Save results
 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-output_file = f"batch_results_api_{timestamp}.json"
+output_file = f"batch_results_{domain}_{timestamp}.json"
 
 output_data = {
     'config': {
+        'domain': domain,
         'proxy_type': proxy_type,
         'num_requests': num_requests,
         'timestamp': timestamp,
-        'method': 'HTTP API (simulating PHP)',
+        'method': 'HTTP API',
     },
     'summary': {
         'submitted': len(jobs),

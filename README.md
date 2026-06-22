@@ -6,17 +6,8 @@ Hệ thống crawl web phân tán dùng Redis, RQ, Docker và Playwright.
 
 ### 1. Cài Đặt Dependencies
 
-**Với UV (khuyên dùng):**
 ```bash
 uv sync
-```
-
-**Với pip (không có UV):**
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium
 ```
 
 ### 2. Khởi Động Hệ Thống
@@ -29,22 +20,21 @@ playwright install chromium
 Hệ thống sẽ tự động:
 - ✅ Khởi động Redis container
 - ✅ Khởi động Orchestrator (auto-discover domains)
+- ✅ Build worker images nếu chưa có
 - ✅ Khởi động Dashboard (http://localhost:5000)
 
 ### 3. Gửi Request
 
 ```bash
-# Single request (qua Redis trực tiếp)
-uv run python test_job.py "https://www.fnac.com/product" "fnac"
+cd Run_Test
 
-# Batch (100 URLs từ Excel, qua Redis)
-uv run python test_batch.py 100 fnac
+# Single job qua HTTP API
+python test_api_job.py newark
+python test_api_job.py "https://www.newark.com/dp/100A00001" newark standard
 
-# Single request (qua HTTP API)
-uv run python test_api_job.py "https://www.fnac.com/product" "fnac"
-
-# Batch (qua HTTP API)
-uv run python test_api_batch.py 100 fnac
+# Batch qua HTTP API
+python test_api_batch.py 10 newark
+python test_api_batch.py 50 fnac none
 ```
 
 ### 4. Monitor Jobs
@@ -63,30 +53,31 @@ Mở trình duyệt: **http://localhost:5000**
 ```
 ├── README.md               # File này
 ├── Mo_Ta.md                # Mô tả chi tiết hệ thống
-├── requirements.txt        # Dependencies (pip)
-├── pyproject.toml          # Config UV
 ├── config.py               # Cấu hình chính
 ├── main.py                 # crawl_job, slot management, container spawn
 ├── orchestrator.py         # ThreadSafeWorker, domain discovery, crash recovery
 ├── start.sh                # Script khởi động
 ├── docker-compose.yml      # Docker config
-├── test_job.py             # Test trực tiếp qua Redis
-├── test_batch.py           # Batch test qua Redis
-├── test_api_job.py         # Test qua HTTP API
-├── test_api_batch.py       # Batch test qua HTTP API
+├── .env                    # Cấu hình môi trường
+├── Run_Test/               # Test scripts
+│   ├── test_api_job.py     # Test single job qua HTTP API
+│   ├── test_api_batch.py   # Batch test qua HTTP API
+│   ├── README.md           # Hướng dẫn test
+│   └── TEST_FILE/          # Excel files chứa URLs
 ├── Dashboard/              # Flask dashboard
 │   ├── app.py
 │   └── Dockerfile
-├── Redis_Docker_Image/     # Docker images đã build (.tar.gz)
-│   ├── redis_server-orchestrator-latest.tar.gz
-│   └── redis_server-dashboard-latest.tar.gz
 └── workers/
+    ├── Proxy/
+    │   └── buyproxies_List.xlsx
     ├── fnac/
     │   ├── Dockerfile
     │   ├── run.py
     │   └── sourceCode/
-    └── Proxy/
-        └── buyproxies_List.xlsx
+    └── newark/
+        ├── Dockerfile
+        ├── run.py
+        └── sourceCode/
 ```
 
 ## 🔧 Cấu Hình (.env)
@@ -97,26 +88,24 @@ REDIS_PORT=6379
 CRAWLER_NETWORK=crawler-net
 PROXY_HOST_DIR=./workers/Proxy
 RESULT_TTL=3600
-JOB_TIMEOUT=120
+JOB_TIMEOUT_DEFAULT=120       # Timeout mặc định cho tất cả domain
+JOB_TIMEOUT_NEWARK=720        # Override riêng cho newark
 MAX_CONCURRENT_TOTAL=10
 MAX_CONCURRENT_FNAC=5
-MAX_CONCURRENT_AMAZON=3
+MAX_CONCURRENT_NEWARK=3
 ```
 
 ## 💡 Cách Hoạt Động
 
-1. **Client** gửi request → enqueue vào Redis queue (`crawler:{domain}`)
-2. **Orchestrator** chạy `MAX_CONCURRENT_{DOMAIN}` worker threads per domain
-3. Mỗi **ThreadSafeWorker** pick 1 job, kiểm tra slot (global + domain), rồi chạy `crawl_job`
-4. `crawl_job` acquire slot (atomic Lua), spawn Docker container (worker image)
-5. **Worker container** fetch URL bằng Playwright, lưu `result:{ret_key}` → Redis
-6. **Client** poll `result:{ret_key}` nhận kết quả
+1. **Client** gửi `POST /api/submit-job` với `ret_key=ret_{domain}_{uuid}`
+2. **API** parse domain từ `ret_key`, enqueue vào `crawler:{domain}`
+3. **Orchestrator** chạy `MAX_CONCURRENT_{DOMAIN}` worker threads per domain
+4. Mỗi **ThreadSafeWorker** check slot → dequeue → `crawl_job`
+5. `crawl_job` acquire slot (atomic Lua), spawn Docker container
+6. **Worker container** fetch URL bằng Playwright, lưu `result:{ret_key}` → Redis
+7. **Client** poll `GET /api/job/{ret_key}` nhận kết quả
 
-> **ThreadSafeWorker**: chạy job in-process (không fork), dùng `TimerDeathPenalty` thay SIGALRM — thread-safe, không zombie, không deadlock.
->
-> **Crash recovery**: khi orchestrator restart, `_retry_stale_jobs` tự re-enqueue các job bị mất.
-
-## 📊 API Results
+## 📊 Result Format
 
 ```json
 {
@@ -127,9 +116,17 @@ MAX_CONCURRENT_AMAZON=3
   "cookies": {},
   "elapsed_ms": 5000,
   "total_elapsed_seconds": 5.0,
+  "log": ["..."],
   "error": null
 }
 ```
+
+## ➕ Thêm Domain Mới
+
+1. Tạo `workers/{domain}/` với `Dockerfile`, `run.py`, `sourceCode/`
+2. Thêm `process_single_request()` vào `sourceCode/main.py`
+3. Thêm `JOB_TIMEOUT_{DOMAIN}` và `MAX_CONCURRENT_{DOMAIN}` vào `.env`
+4. Restart → orchestrator tự detect và tạo worker threads
 
 ## 🆘 Troubleshooting
 
@@ -138,23 +135,14 @@ MAX_CONCURRENT_AMAZON=3
 sudo snap install chromium
 ```
 
-### Docker image not found — build từ source
+### Worker image not found
 ```bash
-cd workers/fnac
-docker build -t worker-fnac:latest .
-```
-
-### Docker image not found — load từ cache
-```bash
-docker load < Redis_Docker_Image/redis_server-orchestrator-latest.tar.gz
-docker load < Redis_Docker_Image/redis_server-dashboard-latest.tar.gz
+# Rebuild thủ công
+docker build -t worker-newark:latest workers/newark/
+# Hoặc restart start.sh — tự build nếu chưa có image
 ```
 
 ### Redis connection error
 ```bash
-docker ps  # Verify redis-server running
+docker ps  # Verify redis container running
 ```
-
-## 📝 License
-
-MIT

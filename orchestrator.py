@@ -16,7 +16,7 @@ from rq import SimpleWorker, Queue
 from rq.timeouts import TimerDeathPenalty
 import redis as redis_lib
 
-from config import REDIS_HOST, REDIS_PORT, get_max_concurrent, MAX_CONCURRENT_TOTAL
+from config import REDIS_HOST, REDIS_PORT, get_max_concurrent, get_job_timeout, MAX_CONCURRENT_TOTAL
 
 redis_client = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
 
@@ -166,7 +166,7 @@ def _retry_stale_jobs():
                 redis_client.delete(key)
                 q = Queue(f'crawler:{domain}', connection=redis_client)
                 q.enqueue(crawler_main.crawl_job, url, domain, ret_key, proxy_type,
-                          job_timeout=600, job_id=ret_key)
+                          job_timeout=get_job_timeout(domain), job_id=ret_key)
                 redis_client.setex(f'job_state:{ret_key}', 86400, json.dumps({
                     'state': 'queued',
                     'ret_key': ret_key,

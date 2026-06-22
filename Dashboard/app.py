@@ -170,6 +170,7 @@ def get_jobs_by_state(state):
                         is_failed = (state == 'failed' and job_status != 'success')
                         if is_finished or is_failed:
                             ret_key = key.replace('result:', '')
+                            html = result.get('html') or ''
                             all_jobs.append({
                                 'ret_key': ret_key,
                                 'url': result.get('url', 'N/A'),
@@ -178,7 +179,7 @@ def get_jobs_by_state(state):
                                 'http_code': result.get('http_code', 0),
                                 'error': result.get('error', ''),
                                 'total_elapsed_seconds': result.get('total_elapsed_seconds', 0),
-                                'html_size': len(result.get('html', '')),
+                                'html_size': len(html),
                                 'timestamp': result.get('timestamp', 0),
                             })
                     except:
@@ -252,6 +253,7 @@ def get_jobs():
                         continue
                     result = json.loads(value)
 
+                    html = result.get('html') or ''
                     job_info = {
                         'ret_key': ret_key[:8],
                         'ret_key_full': ret_key,
@@ -260,7 +262,7 @@ def get_jobs():
                         'status': result.get('status', 'unknown'),
                         'http_code': result.get('http_code', 0),
                         'error': result.get('error', ''),
-                        'html_size': len(result.get('html', '')),
+                        'html_size': len(html),
                         'total_elapsed_seconds': result.get('total_elapsed_seconds', 0),
                         'timestamp': result.get('timestamp', 0),
                     }
@@ -727,18 +729,18 @@ def clear_failed():
 
 
 def _extract_domain_from_url(url: str) -> str:
-    """Extract domain from URL (fnac, amazon, etc.)"""
+    """Extract domain from URL (fnac, amazon, newark, etc.)"""
     from urllib.parse import urlparse
     try:
-        domain = urlparse(url).netloc.lower()
-        # Extract domain name: fnac.com -> fnac, amazon.fr -> amazon
-        if 'fnac' in domain:
+        netloc = urlparse(url).netloc.lower()
+        if 'fnac' in netloc:
             return 'fnac'
-        elif 'amazon' in domain:
+        elif 'amazon' in netloc:
             return 'amazon'
+        elif 'newark' in netloc:
+            return 'newark'
         else:
-            # Return base domain if no match
-            return domain.split('.')[0]
+            return netloc.split('.')[-2] if netloc.count('.') >= 1 else netloc.split('.')[0]
     except:
         return None
 
@@ -782,10 +784,15 @@ def submit_job():
         if not ret_key:
             return jsonify({'error': 'Missing required field: ret_key'}), 400
 
-        # Extract domain from URL
-        domain = _extract_domain_from_url(url)
+        # Extract domain from ret_key (format: ret_{domain}_{uuid})
+        # Fallback to URL extraction if ret_key format doesn't match
+        parts = ret_key.split('_', 2)
+        if len(parts) >= 2 and parts[0] == 'ret':
+            domain = parts[1]
+        else:
+            domain = _extract_domain_from_url(url)
         if not domain:
-            return jsonify({'error': 'Cannot determine domain from URL'}), 400
+            return jsonify({'error': 'Cannot determine domain from ret_key or URL'}), 400
 
         # Validate proxy_type
         valid_proxy_types = ['standard', 'none']
@@ -816,7 +823,7 @@ def submit_job():
                 domain=domain,
                 ret_key=ret_key,
                 proxy_type=proxy_type,
-                job_timeout=600,
+                job_timeout=int(os.getenv(f'JOB_TIMEOUT_{domain.upper()}', os.getenv('JOB_TIMEOUT_DEFAULT', 120))),
                 job_id=ret_key
             )
 

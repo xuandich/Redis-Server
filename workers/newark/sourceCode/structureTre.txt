@@ -1,0 +1,10 @@
+project/
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── main.py
+├── xpath_config.json
+├── input/
+│   └── url.xlsx
+└── Proxy/
+    └── buyproxies_List.xlsx

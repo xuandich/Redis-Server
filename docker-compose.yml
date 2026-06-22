@@ -28,11 +28,12 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./workers:/app/workers
+    env_file:
+      - .env
     environment:
-      REDIS_HOST: ${REDIS_HOST}
-      REDIS_PORT: ${REDIS_PORT}
-      CRAWLER_NETWORK: ${CRAWLER_NETWORK}
+      REDIS_HOST: redis
       PROXY_HOST_DIR: ${PROXY_HOST_DIR}
+      PROXY_CHECK_DIR: /app/workers/Proxy
     depends_on:
       redis:
         condition: service_healthy
@@ -45,9 +46,10 @@ services:
       - crawler-net
     ports:
       - "5000:5000"
+    env_file:
+      - .env
     environment:
       REDIS_HOST: redis
-      REDIS_PORT: 6379
       REDIS_DB: 0
       DASHBOARD_HOST: 0.0.0.0
       DASHBOARD_PORT: 5000

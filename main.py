@@ -5,14 +5,14 @@ import time
 
 from config import (
     REDIS_HOST, REDIS_PORT, CRAWLER_NETWORK, PROXY_HOST_DIR,
-    CHROMIUM_SNAP_DIR, CHROMIUM_PATH_IN_CONTAINER, JOB_TIMEOUT,
+    CHROMIUM_SNAP_DIR, CHROMIUM_PATH_IN_CONTAINER, JOB_TIMEOUT_DEFAULT,
     CONTAINER_MEM_LIMIT, CONTAINER_SHM_SIZE, RESULT_TTL, get_max_concurrent,
-    MAX_CONCURRENT_TOTAL
+    get_job_timeout, MAX_CONCURRENT_TOTAL
 )
 
 redis_client = redis_lib.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-# Timeout must exceed JOB_TIMEOUT so container.wait() isn't cut off by HTTP socket timeout
-docker_client = docker.from_env(timeout=JOB_TIMEOUT + 120)
+# Timeout must exceed JOB_TIMEOUT_DEFAULT so container.wait() isn't cut off by HTTP socket timeout
+docker_client = docker.from_env(timeout=JOB_TIMEOUT_DEFAULT + 120)
 
 _LUA_ACQUIRE = """
 local key = KEYS[1]
@@ -99,6 +99,15 @@ def crawl_job(url: str, domain: str, ret_key: str, proxy_type: str = 'standard')
             _clear_job_state(ret_key)
             print(f"[CRAWL_JOB] {domain} {job_id} - CONTAINER DONE", flush=True)
             return result
+        except Exception as e:
+            print(f"[CRAWL_JOB] {domain} {job_id} - EXCEPTION: {e}", flush=True)
+            error_result = {
+                'status': 'failed', 'error': str(e),
+                'ret_key': ret_key, 'domain': domain, 'url': url,
+            }
+            redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
+            _clear_job_state(ret_key)
+            raise
         finally:
             _release_slot('domain', domain)
             print(f"[CRAWL_JOB] {domain} {job_id} - released domain slot", flush=True)
@@ -127,9 +136,15 @@ def _spawn_and_wait_container(url: str, domain: str, ret_key: str, proxy_type: s
     volumes = {
         CHROMIUM_SNAP_DIR: {'bind': CHROMIUM_SNAP_DIR, 'mode': 'ro'},
     }
-    # Use PROXY_HOST_DIR (host path) — Docker daemon needs host path to mount volumes
-    if PROXY_HOST_DIR:
+    import os as _os
+    # PROXY_HOST_DIR is a host path (for Docker volume mount).
+    # Check existence via PROXY_CHECK_DIR (container-internal path to same dir).
+    _proxy_check = _os.environ.get('PROXY_CHECK_DIR', PROXY_HOST_DIR)
+    if proxy_type == 'standard' and PROXY_HOST_DIR and _os.path.isdir(_proxy_check):
         volumes[PROXY_HOST_DIR] = {'bind': '/app/Proxy', 'mode': 'ro'}
+    elif proxy_type == 'standard':
+        print(f"[{domain}] WARNING: PROXY_HOST_DIR not found ({PROXY_HOST_DIR!r}), running without proxy", flush=True)
+        proxy_type = 'none'
 
     container = docker_client.containers.run(
         image_name,
@@ -152,7 +167,7 @@ def _spawn_and_wait_container(url: str, domain: str, ret_key: str, proxy_type: s
         cap_add=['SYS_ADMIN'],
     )
     try:
-        container.wait(timeout=JOB_TIMEOUT)
+        container.wait(timeout=get_job_timeout(domain))
         print(f"[{domain}] Container {container.short_id} finished")
     except Exception as e:
         print(f"[{domain}] Container error: {e}")

@@ -5,6 +5,7 @@
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROXY_DIR="${PROJECT_ROOT}/workers/Proxy"
 
+
 # Stop old containers (preserve Redis data)
 echo "🛑 Stopping old containers..."
 docker compose stop > /dev/null 2>&1 && echo "   ✅ Stopped" || echo "   ⓘ No old containers"
@@ -26,8 +27,8 @@ fi
 
 # Check Proxy directory
 if [ ! -d "$PROXY_DIR" ]; then
-    echo "❌ Proxy directory not found: $PROXY_DIR"
-    exit 1
+    echo "⚠️  Proxy directory not found: $PROXY_DIR"
+    echo "   Jobs with proxy_type='standard' will run without proxy (fallback)"
 fi
 
 # Check Chromium snap
