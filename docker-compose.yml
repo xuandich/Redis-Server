@@ -21,7 +21,7 @@ services:
       retries: 10
 
   orchestrator:
-    build: .
+    build: ./redis_server
     container_name: orchestrator
     networks:
       - crawler-net
