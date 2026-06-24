@@ -36,7 +36,6 @@ Redis_Docker_Image/
 Thumbs.db
 
 # Project-specific
-TEST_FILE/
 output/
 logs/
 

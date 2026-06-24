@@ -131,7 +131,10 @@ def _spawn_and_wait_container(url: str, domain: str, ret_key: str, proxy_type: s
             print(f"[{domain}] Image loaded: {image_name}")
         else:
             error_msg = f'Worker image {image_name} not found'
-            return {'url': url, 'ret_key': ret_key, 'domain': domain, 'error': error_msg, 'status': 'failed'}
+            error_result = {'url': url, 'ret_key': ret_key, 'domain': domain, 'error': error_msg, 'status': 'failed', 'timestamp': time.time()}
+            redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(error_result, ensure_ascii=False, default=str))
+            _clear_job_state(ret_key)
+            return error_result
 
     volumes = {
         CHROMIUM_SNAP_DIR: {'bind': CHROMIUM_SNAP_DIR, 'mode': 'ro'},

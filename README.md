@@ -52,18 +52,21 @@ Mở trình duyệt: **http://localhost:5000**
 
 ```
 ├── README.md               # File này
-├── Mo_Ta.md                # Mô tả chi tiết hệ thống
-├── config.py               # Cấu hình chính
-├── main.py                 # crawl_job, slot management, container spawn
-├── orchestrator.py         # ThreadSafeWorker, domain discovery, crash recovery
 ├── start.sh                # Script khởi động
+├── stop.sh                 # Script dừng
 ├── docker-compose.yml      # Docker config
 ├── .env                    # Cấu hình môi trường
+├── redis_server/           # Orchestrator service
+│   ├── config.py           # Cấu hình chính
+│   ├── main.py             # crawl_job, slot management, container spawn
+│   ├── orchestrator.py     # ThreadSafeWorker, domain discovery, crash recovery
+│   ├── requirements.txt
+│   └── Dockerfile
 ├── Run_Test/               # Test scripts
 │   ├── test_api_job.py     # Test single job qua HTTP API
 │   ├── test_api_batch.py   # Batch test qua HTTP API
-│   ├── README.md           # Hướng dẫn test
-│   └── TEST_FILE/          # Excel files chứa URLs
+│   └── README.md           # Hướng dẫn test
+├── TEST_FILE/              # Excel files chứa URLs
 ├── Dashboard/              # Flask dashboard
 │   ├── app.py
 │   └── Dockerfile
@@ -86,10 +89,11 @@ Mở trình duyệt: **http://localhost:5000**
 REDIS_HOST=redis
 REDIS_PORT=6379
 CRAWLER_NETWORK=crawler-net
-PROXY_HOST_DIR=./workers/Proxy
 RESULT_TTL=3600
 JOB_TIMEOUT_DEFAULT=120       # Timeout mặc định cho tất cả domain
 JOB_TIMEOUT_NEWARK=720        # Override riêng cho newark
+CONTAINER_MEM_LIMIT=1g
+CONTAINER_SHM_SIZE=2g
 MAX_CONCURRENT_TOTAL=10
 MAX_CONCURRENT_FNAC=5
 MAX_CONCURRENT_NEWARK=3

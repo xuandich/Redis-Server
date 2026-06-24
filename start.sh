@@ -31,26 +31,16 @@ if [ ! -d "$PROXY_DIR" ]; then
     echo "   Jobs with proxy_type='standard' will run without proxy (fallback)"
 fi
 
-# Check Chromium snap
+# Check Chromium snap (auto-install if missing — no prompt, works at boot)
 echo "🔍 Checking Chromium snap..."
 if [ ! -f "/snap/chromium/current/usr/lib/chromium-browser/chrome" ]; then
-    echo "⚠️  Chromium snap not found"
-    echo ""
-    echo "📝 Install Chromium snap:"
-    echo "   sudo snap install chromium"
-    echo ""
-    read -p "Install now? (y/n): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        sudo snap install chromium
-        if [ $? -ne 0 ]; then
-            echo "❌ Failed to install Chromium snap"
-            exit 1
-        fi
-    else
-        echo "❌ Chromium snap required to run"
+    echo "⚠️  Chromium snap not found — installing automatically..."
+    sudo snap install chromium
+    if [ $? -ne 0 ]; then
+        echo "❌ Failed to install Chromium snap"
         exit 1
     fi
+    echo "   ✅ Chromium snap installed"
 fi
 
 echo "✅ Chromium snap found"
