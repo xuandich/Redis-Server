@@ -198,6 +198,9 @@ def _spawn_and_wait_container(url: str, domain: str, ret_key: str, proxy_type: s
     if result:
         result_dict = json.loads(result)
         result_dict.setdefault('timestamp', time.time())
+        result_dict.setdefault('domain', domain)
+        result_dict.setdefault('url', url)
+        redis_client.setex(f"result:{ret_key}", RESULT_TTL, json.dumps(result_dict, ensure_ascii=False, default=str))
         return result_dict
 
     error_result = {
