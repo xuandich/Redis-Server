@@ -1,12 +1,22 @@
 #!/bin/bash
-# Stop all services (Redis, Orchestrator, Dashboard)
+# Stop all services (Redis, Orchestrator, Dashboard, Workers)
 # Usage: ./stop.sh          # Stop normally (keep Redis data)
 #        ./stop.sh -clear   # Stop and clear all jobs from Redis (FLUSHALL)
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CLEAR_JOBS=false
 if [[ "$@" == *"-clear"* ]]; then
     CLEAR_JOBS=true
 fi
+
+# Load .env
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    export $(grep -v '^#' "$PROJECT_ROOT/.env" | xargs)
+fi
+
+REDIS_PORT=${REDIS_PORT:-6379}
+CRAWLER_NETWORK=${CRAWLER_NETWORK:-crawler-net}
 
 echo "🛑 Stopping services..."
 echo ""
@@ -14,15 +24,6 @@ echo ""
 # Clear Redis if -clear flag provided
 if [ "$CLEAR_JOBS" = true ]; then
     echo "🗑️  Clearing all Redis data..."
-
-    # Load .env to get Redis port
-    if [ -f ".env" ]; then
-        export $(grep -v '^#' .env | xargs)
-    fi
-
-    REDIS_PORT=${REDIS_PORT:-6379}
-
-    # Try to clear Redis using redis-cli
     if command -v redis-cli &> /dev/null; then
         redis-cli -p $REDIS_PORT FLUSHALL > /dev/null 2>&1
         if [ $? -eq 0 ]; then
@@ -37,15 +38,19 @@ if [ "$CLEAR_JOBS" = true ]; then
     echo ""
 fi
 
-# Stop Docker containers gracefully
-if docker compose stop; then
-    echo "  ✅ Redis stopped"
-    echo "  ✅ Orchestrator stopped"
-    echo "  ✅ Dashboard stopped"
-    echo "  ✅ Networks cleaned up"
-else
-    echo "  ⓘ Docker services not running"
+# Stop and remove all containers on the project network (workers + compose services)
+ALL_IDS=$(docker ps -q --filter "network=$CRAWLER_NETWORK")
+if [ -n "$ALL_IDS" ]; then
+    COUNT=$(echo "$ALL_IDS" | wc -l)
+    echo "🔧 Stopping $COUNT container(s) on network '$CRAWLER_NETWORK'..."
+    echo "$ALL_IDS" | xargs docker stop > /dev/null 2>&1
+    echo "$ALL_IDS" | xargs docker rm > /dev/null 2>&1
+    echo "  ✅ All containers stopped and removed"
+    echo ""
 fi
+
+# Remove compose containers (handles exited ones not caught by network filter)
+docker compose down > /dev/null 2>&1
 
 echo ""
 if [ "$CLEAR_JOBS" = true ]; then

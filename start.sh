@@ -3,17 +3,15 @@
 # Auto-resolve PROXY_HOST_DIR và check Chromium
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROXY_DIR="${PROJECT_ROOT}/workers/Proxy"
 
+# Load .env (single source of truth for all config)
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    export $(grep -v '^#' "$PROJECT_ROOT/.env" | xargs)
+fi
 
 # Stop old containers (preserve Redis data)
 echo "🛑 Stopping old containers..."
 docker compose stop > /dev/null 2>&1 && echo "   ✅ Stopped" || echo "   ⓘ No old containers"
-
-# Load .env for REDIS_PORT
-if [ -f "$PROJECT_ROOT/.env" ]; then
-    export $(grep -v '^#' "$PROJECT_ROOT/.env" | xargs)
-fi
 
 REDIS_PORT=${REDIS_PORT:-6379}
 
@@ -26,8 +24,8 @@ if [ -n "$CONFLICT_CONTAINER" ]; then
 fi
 
 # Check Proxy directory
-if [ ! -d "$PROXY_DIR" ]; then
-    echo "⚠️  Proxy directory not found: $PROXY_DIR"
+if [ ! -d "$PROXY_HOST_DIR" ]; then
+    echo "⚠️  Proxy directory not found: $PROXY_HOST_DIR"
     echo "   Jobs with proxy_type='standard' will run without proxy (fallback)"
 fi
 
@@ -130,11 +128,8 @@ fi
 echo ""
 
 echo "📂 Project: $PROJECT_ROOT"
-echo "📁 Proxy dir: $PROXY_DIR"
+echo "📁 Proxy dir: $PROXY_HOST_DIR"
 echo ""
-
-# Set env var
-export PROXY_HOST_DIR="$PROXY_DIR"
 
 # Check for -quiet flag
 QUIET_MODE=false
