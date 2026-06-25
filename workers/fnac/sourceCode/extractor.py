@@ -277,12 +277,15 @@ class FnacHtmlFetcher:
                 result.cookies = {c['name']: c['value'] for c in cookies_list}
                 elapsed_ms = (time.time() - request_start) * 1000
                 result.elapsed_ms = elapsed_ms
-                if result.http_code == 403:
+                if result.http_code in (403, 429, 503):
                     if attempt < max_retries - 1:
-                        self.add_log(f"⚠️ HTTP 403 lần {attempt+1}, giữ cookie retry sau 5s...")
+                        self.add_log(f"⚠️ HTTP {result.http_code} lần {attempt+1}, retry sau 5s...")
                         await asyncio.sleep(5)
                         continue
-                    result.mark_failed('HTTP 403 Forbidden')
+                    result.mark_failed(f'HTTP {result.http_code}')
+                    return result
+                if result.http_code == 0 or result.http_code >= 400:
+                    result.mark_failed(f'HTTP {result.http_code}')
                     return result
                 result.mark_success(result.html, result.headers, result.http_code, result.cookies, elapsed_ms)
                 return result

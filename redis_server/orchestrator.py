@@ -133,6 +133,7 @@ def _retry_stale_jobs():
                 url = data.get('url', '')
                 domain = data.get('domain', '')
                 proxy_type = data.get('proxy_type', 'standard')
+                retry_count = data.get('retry_count', 0)
 
                 if state not in ('queued', 'running'):
                     redis_client.delete(key)
@@ -151,10 +152,16 @@ def _retry_stale_jobs():
                     if job_status == 'queued':
                         skipped += 1
                         continue
-                    elif job_status in ('finished', 'failed'):
+                    elif job_status == 'finished':
                         redis_client.delete(key)
                         skipped += 1
                         continue
+                    elif job_status == 'failed':
+                        # failed nhưng không có result → job bị mất, re-enqueue
+                        try:
+                            rq_job.delete()
+                        except Exception:
+                            pass
                     else:
                         try:
                             rq_job.delete()
@@ -164,6 +171,17 @@ def _retry_stale_jobs():
                     pass  # Job lost entirely → re-enqueue
 
                 redis_client.delete(key)
+
+                if retry_count >= 3:
+                    error_result = {
+                        'status': 'failed', 'error': f'Job failed after {retry_count} retries',
+                        'ret_key': ret_key, 'domain': domain, 'url': url, 'timestamp': time.time(),
+                    }
+                    redis_client.setex(f'result:{ret_key}', 86400, json.dumps(error_result, ensure_ascii=False))
+                    print(f"[Retry] Gave up {ret_key[:8]} ({domain}) after {retry_count} retries: {url[:70]}")
+                    skipped += 1
+                    continue
+
                 q = Queue(f'crawler:{domain}', connection=redis_client)
                 q.enqueue(crawler_main.crawl_job, url, domain, ret_key, proxy_type,
                           job_timeout=get_job_timeout(domain), job_id=ret_key)
@@ -173,10 +191,11 @@ def _retry_stale_jobs():
                     'url': url,
                     'domain': domain,
                     'proxy_type': proxy_type,
+                    'retry_count': retry_count + 1,
                     'timestamp': time.time(),
                 }))
                 retried += 1
-                print(f"[Retry] Re-enqueued {ret_key[:8]} ({domain}): {url[:70]}")
+                print(f"[Retry] Re-enqueued {ret_key[:8]} ({domain}) attempt {retry_count + 1}/3: {url[:70]}")
             except Exception as e:
                 print(f"[Retry] Error processing {key}: {e}")
         if cursor == 0:

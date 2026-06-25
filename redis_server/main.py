@@ -53,12 +53,20 @@ def _release_slot(slot_type: str, key: str):
 
 def _set_job_state(ret_key: str, state: str, url: str, domain: str, proxy_type: str = 'standard', ttl: int = 86400):
     """Set job state for dashboard tracking"""
+    retry_count = 0
+    existing = redis_client.get(f"job_state:{ret_key}")
+    if existing:
+        try:
+            retry_count = json.loads(existing).get('retry_count', 0)
+        except Exception:
+            pass
     redis_client.setex(f"job_state:{ret_key}", ttl, json.dumps({
         'ret_key': ret_key,
         'state': state,
         'url': url,
         'domain': domain,
         'proxy_type': proxy_type,
+        'retry_count': retry_count,
         'timestamp': time.time()
     }, ensure_ascii=False, default=str))
 
