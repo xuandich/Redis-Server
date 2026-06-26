@@ -49,3 +49,6 @@ Mo_Ta.md
 # Audit run outputs (harness scripts/context/README tracked; run outputs not)
 Reviews_Project/audit/results/*.json
 
+# Sync script (with hardcoded paths, not shared)
+scripts/sync-dirs.sh
+

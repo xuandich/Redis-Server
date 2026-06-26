@@ -115,18 +115,7 @@ Check that Docker is running:
 systemctl status docker
 ```
 
-### Port 6379 already in use
-`start.sh` automatically detects and stops any container holding the port. If the issue persists:
-```bash
-sudo lsof -i :6379
-sudo kill -9 <PID>
-```
 
-### Chromium not found
-`start.sh` automatically installs Chromium snap if missing. To install manually:
-```bash
-sudo snap install chromium
-```
 
 ### Full reset (flush data and rebuild everything)
 ```bash
