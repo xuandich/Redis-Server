@@ -1,19 +1,19 @@
 # Redis Crawler Test Suite
 
-Test scripts để kiểm tra worker crawlers qua HTTP API.
+Test scripts for verifying worker crawlers via the HTTP API.
 
 ## 📋 Test Files
 
-| File | Mục đích | Cách dùng |
+| File | Purpose | Usage |
 |---|---|---|
 | `test_api_job.py` | Submit 1 job via API, poll result | `python test_api_job.py [url] [proxy_type]` |
-| `test_api_batch.py` | Batch N jobs via API từ Excel | `python test_api_batch.py [num] [domain] [proxy_type]` |
+| `test_api_batch.py` | Submit N batch jobs via API from Excel | `python test_api_batch.py [num] [domain] [proxy_type]` |
 
-> Cả 2 file giao tiếp qua HTTP API (`localhost:5000`) — không cần kết nối Redis trực tiếp.
+> Both files communicate via HTTP API (`localhost:5000`) — no direct Redis connection needed.
 
 **proxy_type:**
-- `standard` — dùng proxy từ file Excel (default)
-- `none` — kết nối trực tiếp, không qua proxy
+- `standard` — use proxies from Excel file (default)
+- `none` — direct connection, no proxy
 
 ---
 
@@ -21,27 +21,27 @@ Test scripts để kiểm tra worker crawlers qua HTTP API.
 
 ### Single Job
 ```bash
-# Random URL từ TEST_FILE/fnac_urls.xlsx (default)
+# Random URL from TEST_FILE/fnac_urls.xlsx (default)
 python test_api_job.py
 
-# Random URL theo domain
+# Random URL by domain
 python test_api_job.py newark
 python test_api_job.py newark none
 
-# URL trực tiếp
+# Direct URL
 python test_api_job.py "https://www.newark.com/dp/100A00001" newark standard
 python test_api_job.py "https://www.fnac.com/..." fnac none
 ```
 
 ### Batch
 ```bash
-# 10 jobs fnac (default)
+# 10 fnac jobs (default)
 python test_api_batch.py 10
 
-# 10 jobs newark
+# 10 newark jobs
 python test_api_batch.py 10 newark
 
-# 50 jobs newark, không proxy
+# 50 newark jobs, no proxy
 python test_api_batch.py 50 newark none
 ```
 
@@ -49,7 +49,7 @@ python test_api_batch.py 50 newark none
 
 ## 📁 Test Data
 
-Tạo folder và file Excel trước khi chạy batch:
+Create the folder and Excel file before running batch tests:
 
 ```
 TEST_FILE/
@@ -90,11 +90,11 @@ pd.DataFrame(urls).to_excel('TEST_FILE/fnac_urls.xlsx', index=False, header=Fals
 
 ## ⚠️ Timeout Configuration
 
-Cấu hình trong `.env`:
+Configure in `.env`:
 
 ```env
-JOB_TIMEOUT_DEFAULT=120    # default timeout cho tất cả domain
-JOB_TIMEOUT_NEWARK=720     # override riêng cho newark
+JOB_TIMEOUT_DEFAULT=120    # default timeout for all domains
+JOB_TIMEOUT_NEWARK=720     # per-domain override for newark
 RESULT_TTL=3600
 ```
 
@@ -103,13 +103,13 @@ RESULT_TTL=3600
 ## 🔍 Monitoring
 
 ```bash
-# Logs orchestrator
+# Orchestrator logs
 docker logs -f redis_server-orchestrator-1
 
-# Kiểm tra result trong Redis
+# Check result in Redis
 redis-cli GET result:<ret_key>
 
-# Kiểm tra slot hiện tại
+# Check current slots
 redis-cli GET slots:global:total
 redis-cli GET slots:domain:newark
 ```
@@ -118,21 +118,21 @@ redis-cli GET slots:domain:newark
 
 ## 🐛 Troubleshooting
 
-**"Connection refused"** — API chưa chạy:
+**"Connection refused"** — API is not running:
 ```bash
 bash start.sh
 ```
 
-**"Timeout after 180s"** — job chậm hoặc bị stuck:
+**"Timeout after 180s"** — job is slow or stuck:
 ```bash
-# Xem log container worker
+# View worker container logs
 docker logs worker-newark-xxx
 
-# Tăng timeout trong .env
+# Increase timeout in .env
 JOB_TIMEOUT_NEWARK=720
 ```
 
-**"Domain not discovered"** — thiếu Dockerfile:
+**"Domain not discovered"** — missing Dockerfile:
 ```bash
 ls workers/<domain>/Dockerfile
 ```
