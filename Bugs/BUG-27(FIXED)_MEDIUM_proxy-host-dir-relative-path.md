@@ -1,7 +1,7 @@
 # BUG-27: PROXY_HOST_DIR is a relative path — breaks proxy mount on direct 'docker compose up'
 
 **Severity**: MEDIUM
-**Status**: OPEN
+**Status**: FIXED (commit a34c2d4, xác nhận 2026-06-26)
 **Date**: 2026-06-19
 
 ## Problem
@@ -48,6 +48,12 @@ Chạy `docker compose up` trực tiếp (không qua start.sh)
 PROXY_HOST_DIR=/home/xuandich/CODE/PO/Redis_Server/workers/Proxy
 ```
 Hoặc trong main.py, resolve relative → absolute dựa trên một ENV gốc đã biết. Hoặc document rõ "phải chạy qua start.sh".
+
+## Fix Applied (commit a34c2d4)
+
+`.env:7` đã đổi sang **absolute path** (`PROXY_HOST_DIR=/home/xuandich/CODE/PO/Redis_Server/workers/Proxy`); `start.sh` bỏ override hardcoded `PROXY_DIR`, load `.env` sớm và dùng `PROXY_HOST_DIR` từ `.env` làm nguồn duy nhất. `docker compose up` trực tiếp nay nhận absolute path → mount đúng. Đúng như "fix đề xuất" ở trên.
+
+> ⚠️ Còn sót: `.env.example` KHÔNG có dòng `PROXY_HOST_DIR` → `cp .env.example .env` cho người mới → biến rỗng → proxy bị tắt âm thầm. Theo dõi ở review 2026-06-26 (finding RAW §4).
 
 ## Test
 

@@ -58,10 +58,20 @@ class ThreadSafeWorker(SimpleWorker):
         pass
 
     def dequeue_job_and_maintain_ttl(self, timeout, max_idle_time=None):
-        """Check slots TRƯỚC khi dequeue — nếu full thì sleep + heartbeat"""
-        while not _can_acquire_slots(self.domain):
-            time.sleep(1)
-            self.heartbeat()
+        """Check slots TRƯỚC khi dequeue — nếu full thì sleep + heartbeat.
+        Nếu Redis blip, dùng exponential backoff thay vì chết vĩnh viễn."""
+        backoff = 0
+        while True:
+            try:
+                if _can_acquire_slots(self.domain):
+                    break
+                self.heartbeat()
+                backoff = 0
+                time.sleep(1)
+            except Exception as e:
+                backoff = min(backoff * 2 if backoff else 5, 60)
+                print(f"[{self.domain}] Redis blip in slot-wait, retry in {backoff}s: {e}", flush=True)
+                time.sleep(backoff)
 
         return super().dequeue_job_and_maintain_ttl(timeout, max_idle_time)
 
@@ -85,21 +95,49 @@ def discover_worker_domains():
 
 
 def start_worker_for_domain(domain, worker_index):
-    """Một SimpleWorker instance cho domain — blocking loop xử lý jobs tuần tự"""
+    """Một SimpleWorker instance cho domain — auto-restart trên Redis blip / crash.
+
+    Lưu ý RQ SimpleWorker.work() KHÔNG raise khi gặp lỗi Redis lúc execute_job/
+    heartbeat: nó bắt redis.TimeoutError và mọi exception khác rồi `break` + return
+    bình thường (chỉ SystemExit mới raise). Vì ta chạy burst=False, không signal
+    handler, không max_jobs/max_idle_time → work() return ĐỒNG NGHĨA với lỗi cần
+    restart, nên ta restart trên cả lần return bình thường, chỉ dừng khi shutdown.
+    """
     queue_name = f'crawler:{domain}'
-    queue = Queue(queue_name, connection=redis_client)
+    worker_name = f'worker-{domain}-{worker_index}'
+    worker_key = f'rq:worker:{worker_name}'
 
-    worker = ThreadSafeWorker(
-        [queue],
-        connection=redis_client,
-        name=f'worker-{domain}-{worker_index}',
-        default_result_ttl=3600,
-        job_monitoring_interval=5,
-        domain=domain,
-    )
+    while True:
+        try:
+            # Xóa registration cũ trước khi (re)start: nếu lần trước register_death
+            # thất bại (Redis down lúc teardown), key còn sống không có field 'death'
+            # → register_birth sẽ raise ValueError "active worker already exists" và
+            # kẹt tới ~480s (worker_ttl). Xóa best-effort để tránh kẹt restart.
+            try:
+                redis_client.delete(worker_key)
+            except Exception:
+                pass
 
-    print(f"[{domain.upper()}] Worker-{worker_index} listening on {queue_name}", flush=True)
-    worker.work()
+            queue = Queue(queue_name, connection=redis_client)
+            worker = ThreadSafeWorker(
+                [queue],
+                connection=redis_client,
+                name=worker_name,
+                default_result_ttl=3600,
+                job_monitoring_interval=5,
+                domain=domain,
+            )
+            print(f"[{domain.upper()}] Worker-{worker_index} listening on {queue_name}", flush=True)
+            worker.work()
+            # work() return = Redis blip/unhandled exception đã break vòng lặp nội bộ.
+            print(f"[{domain.upper()}] Worker-{worker_index} work() returned (likely Redis blip), restarting in 5s...", flush=True)
+            time.sleep(5)
+        except (KeyboardInterrupt, SystemExit):
+            print(f"[{domain.upper()}] Worker-{worker_index} shutting down", flush=True)
+            break
+        except Exception as e:
+            print(f"[{domain.upper()}] Worker-{worker_index} crashed: {e}, restarting in 5s...", flush=True)
+            time.sleep(5)
 
 
 def _retry_stale_jobs():

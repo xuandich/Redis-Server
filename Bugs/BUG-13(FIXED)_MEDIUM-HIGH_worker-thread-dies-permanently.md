@@ -1,7 +1,7 @@
 # BUG-13: Worker thread dies permanently on Redis blip
 
 **Severity**: MEDIUM-HIGH  
-**Status**: OPEN  
+**Status**: FIXED (2026-06-26)  
 **Date**: 2026-06-19
 
 ## Problem
@@ -56,6 +56,14 @@ while not _can_acquire_slots(self.domain):
 ```
 
 Hoặc tách logic: check slots, catch error, log, retry từ outer function.
+
+## Fix Applied (2026-06-26) — 2 LỚP
+
+> Bản fix đầu (chỉ bọc `dequeue_job_and_maintain_ttl`) **không trọn vẹn**: nó chỉ cứu nhánh **chờ slot**. Redis blip lúc `execute_job()`/`heartbeat()` khiến `rq.Worker.work()` (RQ 2.9.1) bắt `redis.TimeoutError`/`except:` rồi **`break` + return BÌNH THƯỜNG** (chỉ `SystemExit` mới raise) → restart-loop ban đầu `break` luôn → thread vẫn chết. Phải fix 2 lớp:
+
+**Lớp 1 — slot-wait** ([orchestrator.py:60-76](../redis_server/orchestrator.py#L60)): bọc `_can_acquire_slots`+`heartbeat()` trong try/except, exponential backoff 5→10→20→40→60s, reset 0 khi Redis OK.
+
+**Lớp 2 — restart loop** ([orchestrator.py:97-140](../redis_server/orchestrator.py#L97)): vì cấu hình này (`burst=False`, no signal handler, no `max_jobs`/`max_idle_time`) → `work()` return ĐỒNG NGHĨA lỗi cần restart → **restart trên MỌI lần work() return** (không `break`), chỉ dừng khi `KeyboardInterrupt`/`SystemExit`. Thêm `redis_client.delete(rq:worker:{name})` trước mỗi (re)start để tránh `register_birth` ValueError "active worker already exists" (kẹt tới ~480s) khi `register_death` fail lúc Redis còn down (xem BUG-61).
 
 ## Test
 

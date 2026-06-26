@@ -805,6 +805,17 @@ def submit_job():
             queue_name = f'crawler:{domain}'
             queue = Queue(queue_name, connection=redis_conn)
 
+            # BUG-60: bảo toàn retry_count nếu job_state cũ còn tồn tại (re-submit cùng
+            # ret_key). Ghi đè vô điều kiện sẽ reset cap retry của crash-recovery về 0,
+            # khiến job luôn-lỗi bị re-enqueue vô hạn. Giống main.py:_set_job_state.
+            retry_count = 0
+            existing_state = redis_conn.get(f'job_state:{ret_key}')
+            if existing_state:
+                try:
+                    retry_count = json.loads(existing_state).get('retry_count', 0)
+                except Exception:
+                    pass
+
             # Tạo job_state:* key để dashboard track được (giống test_batch.py)
             job_state_data = {
                 'state': 'queued',
@@ -812,6 +823,7 @@ def submit_job():
                 'url': url,
                 'domain': domain,
                 'proxy_type': proxy_type,
+                'retry_count': retry_count,
                 'timestamp': _time.time(),
             }
             redis_conn.set(f'job_state:{ret_key}', json.dumps(job_state_data), ex=86400)
