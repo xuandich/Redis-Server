@@ -117,10 +117,15 @@ while time.time() - poll_start < timeout:
 
             if response.status_code == 200:
                 job_result = response.json()
+                status = job_result.get('status', 'unknown')
+
+                # Only count terminal states — skip queued/running
+                if status in ('queued', 'running'):
+                    continue
+
                 results[job['ret_key']] = job_result
                 job['completed_at'] = time.time()
 
-                status = job_result.get('status', 'unknown')
                 http_code = job_result.get('http_code', 0)
                 html_size = len(job_result.get('html', ''))
                 elapsed = job_result.get('total_elapsed_seconds', 0)
