@@ -51,4 +51,3 @@ Reviews_Project/audit/results/*.json
 
 # Sync script (with hardcoded paths, not shared)
 scripts/sync-dirs.sh
-
