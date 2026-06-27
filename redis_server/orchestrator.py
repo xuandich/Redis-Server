@@ -14,6 +14,7 @@ from pathlib import Path
 from threading import Thread
 from rq import SimpleWorker, Queue
 from rq.timeouts import TimerDeathPenalty
+import docker
 import redis as redis_lib
 
 from config import REDIS_HOST, REDIS_PORT, get_max_concurrent, get_job_timeout, MAX_CONCURRENT_TOTAL
@@ -245,6 +246,18 @@ def _retry_stale_jobs():
 
 def cleanup_stale_workers(domains):
     """Remove stale worker registrations and slot counters from previous crashes"""
+    # Kill orphan worker containers from previous crash before re-enqueuing
+    try:
+        docker_client = docker.from_env()
+        for c in docker_client.containers.list(filters={'label': 'crawler.ret_key'}):
+            print(f"[Cleanup] Killing orphan container {c.short_id} (ret_key={c.labels.get('crawler.ret_key', '?')[:8]})", flush=True)
+            try:
+                c.kill()
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[Cleanup] Could not connect to Docker to kill orphans: {e}", flush=True)
+
     # Xóa tất cả rq:worker:* (tên worker thay đổi qua các lần restart)
     cursor = 0
     while True:

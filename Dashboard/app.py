@@ -605,18 +605,14 @@ def clear_state(state):
         if state == 'queued':
             deleted_keys = set()
             # Clear actual RQ queues — track ret_keys removed
-            # rq:queues set chứa tên queue trực tiếp (ví dụ 'crawler:fnac')
-            raw_keys = redis_conn.smembers('rq:queues') or set()
-            queue_names = set(raw_keys)
-            for queue_name in queue_names:
+            for q in Queue.all(connection=redis_conn):
                 try:
-                    q = Queue(queue_name, connection=redis_conn)
                     for jid in q.get_job_ids():
                         deleted_keys.add(jid)
                     q.empty()
-                    logger.info(f"Emptied queue {queue_name}: {len(deleted_keys)} jobs")
+                    logger.info(f"Emptied queue {q.name}: {len(deleted_keys)} jobs")
                 except Exception as e:
-                    logger.warning(f"Error clearing queue {queue_name}: {e}")
+                    logger.warning(f"Error clearing queue {q.name}: {e}")
             # Also clear job_state:* keys with state='queued'
             cursor = 0
             while True:

@@ -176,6 +176,7 @@ def _spawn_and_wait_container(url: str, domain: str, ret_key: str, proxy_type: s
         mem_limit=CONTAINER_MEM_LIMIT,
         shm_size=CONTAINER_SHM_SIZE,
         cap_add=['SYS_ADMIN'],
+        labels={'crawler.ret_key': ret_key, 'crawler.domain': domain},
     )
     try:
         container.wait(timeout=get_job_timeout(domain))
