@@ -1,152 +1,210 @@
 # Distributed Redis Web Crawler
 
-Hệ thống crawl web phân tán dùng Redis, RQ, Docker và Playwright.
+<p align="center">
+  <a href="https://xuandich.github.io/Redis-Server"><img src="https://img.shields.io/badge/docs-live-DC382D?style=flat-square" alt="Docs"></a>
+  <img src="https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/redis-7-DC382D?style=flat-square&logo=redis&logoColor=white" alt="Redis">
+  <img src="https://img.shields.io/badge/docker-required-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
+  <img src="https://img.shields.io/badge/playwright-latest-45ba4b?style=flat-square" alt="Playwright">
+  <img src="https://img.shields.io/badge/license-MIT-gray?style=flat-square" alt="License">
+</p>
 
-## 🚀 Quick Start
+<p align="center">
+  <b>Self-organizing distributed web crawler — add a Dockerfile, get concurrent scraping.</b><br>
+  Redis queues, Docker isolation per job, atomic slot management, Cloudflare bypass.
+</p>
 
-### 1. Cài Đặt Dependencies
+---
+
+## How it works
+
+```
+Client → POST /api/submit-job
+       → Redis Queue (RQ)
+       → Orchestrator (auto-discovers workers/)
+       → Docker container per job (isolated, memory-capped)
+       → result:{ret_key} written to Redis
+       → Client polls GET /api/job/{ret_key}
+```
+
+The orchestrator scans the `workers/` directory at startup. Any folder with a `Dockerfile` becomes a domain — no config file to update.
+
+## Quick Start
+
+**Requirements:** Python 3.11+, Docker, `sudo snap install chromium`
 
 ```bash
-uv sync
+# 1. Clone and configure
+git clone https://github.com/xuandich/Redis-Server.git
+cd Redis-Server
+cp .env.example .env          # edit as needed
+
+# 2. Start everything
+./start.sh                    # builds missing images, starts all services
+
+# 3. Open dashboard
+open http://localhost:5000
+
+# 4. Submit a job
+curl -X POST http://localhost:5000/api/submit-job \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.manomano.fr/p/product-123", "domain": "manomano"}'
+
+# 5. Fetch result
+curl http://localhost:5000/api/job/<ret_key>
+
+# Stop
+./stop.sh          # keep Redis data
+./stop.sh -clear   # wipe Redis data
 ```
 
-### 2. Khởi Động Hệ Thống
+## Supported Domains
 
-```bash
-./start.sh          # Foreground (xem log trực tiếp)
-./start.sh -quiet   # Background (chạy im lặng)
-```
+| Domain | Browser | Cloudflare bypass | Max concurrent | Timeout |
+|--------|---------|-------------------|---------------|---------|
+| `fnac` | Playwright | Yes | 5 | 120s |
+| `manomano` | Playwright + Xvfb | Yes (Turnstile) | 3 | 300s |
+| `orchestra` | undetected-chrome | Yes | 3 | 180s |
+| `newark` | Playwright | Partial | 3 | 720s |
+| `amazon` | — | — | 3 | 120s |
 
-Hệ thống sẽ tự động:
-- ✅ Khởi động Redis container
-- ✅ Khởi động Orchestrator (auto-discover domains)
-- ✅ Build worker images nếu chưa có
-- ✅ Khởi động Dashboard (http://localhost:5000)
+## API
 
-### 3. Gửi Request
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/submit-job` | Submit a crawl job. Returns `ret_key`. |
+| `GET` | `/api/job/<ret_key>` | Fetch result by return key. |
+| `GET` | `/api/jobs/<state>` | Paginated jobs: `queued · running · finished · failed` |
+| `GET` | `/api/stats` | Counts by state and domain, success rate. |
+| `GET` | `/api/workers` | Active RQ workers and current job. |
+| `POST` | `/api/clear_state/<state>` | Bulk-delete all jobs in a state. |
+| `POST` | `/api/cancel/<ret_key>` | Cancel a queued job. |
+| `POST` | `/api/delete/<ret_key>` | Delete job and result from Redis. |
 
-```bash
-cd Run_Test
-
-# Single job qua HTTP API
-python test_api_job.py newark
-python test_api_job.py "https://www.newark.com/dp/100A00001" newark standard
-
-# Batch qua HTTP API
-python test_api_batch.py 10 newark
-python test_api_batch.py 50 fnac none
-```
-
-### 4. Monitor Jobs
-
-Mở trình duyệt: **http://localhost:5000**
-
-## 📋 Yêu Cầu Hệ Thống
-
-- **Python:** ≥3.11
-- **Docker:** Latest version
-- **Chromium snap:** `sudo snap install chromium`
-- **Disk:** ~2GB
-
-## 📚 Cấu Trúc Thư Mục
-
-```
-├── README.md               # File này
-├── start.sh                # Script khởi động
-├── stop.sh                 # Script dừng
-├── docker-compose.yml      # Docker config
-├── .env                    # Cấu hình môi trường
-├── redis_server/           # Orchestrator service
-│   ├── config.py           # Cấu hình chính
-│   ├── main.py             # crawl_job, slot management, container spawn
-│   ├── orchestrator.py     # ThreadSafeWorker, domain discovery, crash recovery
-│   ├── requirements.txt
-│   └── Dockerfile
-├── Run_Test/               # Test scripts
-│   ├── test_api_job.py     # Test single job qua HTTP API
-│   ├── test_api_batch.py   # Batch test qua HTTP API
-│   └── README.md           # Hướng dẫn test
-├── TEST_FILE/              # Excel files chứa URLs
-├── Dashboard/              # Flask dashboard
-│   ├── app.py
-│   └── Dockerfile
-└── workers/
-    ├── Proxy/
-    │   └── buyproxies_List.xlsx
-    ├── fnac/
-    │   ├── Dockerfile
-    │   ├── run.py
-    │   └── sourceCode/
-    └── newark/
-        ├── Dockerfile
-        ├── run.py
-        └── sourceCode/
-```
-
-## 🔧 Cấu Hình (.env)
-
-```ini
-REDIS_HOST=redis
-REDIS_PORT=6379
-CRAWLER_NETWORK=crawler-net
-RESULT_TTL=3600
-JOB_TIMEOUT_DEFAULT=120       # Timeout mặc định cho tất cả domain
-JOB_TIMEOUT_NEWARK=720        # Override riêng cho newark
-CONTAINER_MEM_LIMIT=1g
-CONTAINER_SHM_SIZE=2g
-MAX_CONCURRENT_TOTAL=10
-MAX_CONCURRENT_FNAC=5
-MAX_CONCURRENT_NEWARK=3
-```
-
-## 💡 Cách Hoạt Động
-
-1. **Client** gửi `POST /api/submit-job` với `ret_key=ret_{domain}_{uuid}`
-2. **API** parse domain từ `ret_key`, enqueue vào `crawler:{domain}`
-3. **Orchestrator** chạy `MAX_CONCURRENT_{DOMAIN}` worker threads per domain
-4. Mỗi **ThreadSafeWorker** check slot → dequeue → `crawl_job`
-5. `crawl_job` acquire slot (atomic Lua), spawn Docker container
-6. **Worker container** fetch URL bằng Playwright, lưu `result:{ret_key}` → Redis
-7. **Client** poll `GET /api/job/{ret_key}` nhận kết quả
-
-## 📊 Result Format
+## Result format
 
 ```json
 {
   "status": "success",
   "http_code": 200,
-  "html": "...",
+  "html": "<!DOCTYPE html>...",
   "headers": {},
   "cookies": {},
-  "elapsed_ms": 5000,
-  "total_elapsed_seconds": 5.0,
-  "log": ["..."],
+  "elapsed_ms": 4821,
+  "total_elapsed_seconds": 5.1,
+  "domain": "manomano",
+  "ret_key": "ret_manomano_f3a2b1c0-...",
+  "log": ["✅ CF pass after 5s", "📄 485,106 bytes"],
   "error": null
 }
 ```
 
-## ➕ Thêm Domain Mới
+## Configuration
 
-1. Tạo `workers/{domain}/` với `Dockerfile`, `run.py`, `sourceCode/`
-2. Thêm `process_single_request()` vào `sourceCode/main.py`
-3. Thêm `JOB_TIMEOUT_{DOMAIN}` và `MAX_CONCURRENT_{DOMAIN}` vào `.env`
-4. Restart → orchestrator tự detect và tạo worker threads
+Copy `.env.example` to `.env`. Per-domain overrides use the `_{DOMAIN}` suffix.
 
-## 🆘 Troubleshooting
+```ini
+REDIS_HOST=redis
+REDIS_PORT=6379
 
-### Chromium not found
+RESULT_TTL=3600                  # seconds to keep results in Redis
+JOB_TIMEOUT_DEFAULT=120          # container kill timeout (seconds)
+JOB_TIMEOUT_MANOMANO=300         # per-domain override
+JOB_TIMEOUT_NEWARK=720
+
+CONTAINER_MEM_LIMIT=1g
+CONTAINER_SHM_SIZE=2g            # must be >512MB for Chromium
+
+MAX_CONCURRENT_TOTAL=10          # global cap across all domains
+MAX_CONCURRENT_FNAC=5            # per-domain cap
+MAX_CONCURRENT_MANOMANO=3
+
+PROXY_HOST_DIR=/path/to/Proxy    # mounted read-only into containers
+```
+
+## Adding a new domain
+
+```
+workers/
+└── mynewdomain/
+    ├── Dockerfile          ← triggers auto-discovery
+    ├── run.py              ← reads URL, RET_KEY from env; writes result to Redis
+    └── sourceCode/
+        ├── main.py         ← async process_single_request(request)
+        ├── extractor.py
+        └── requirements.txt
+```
+
+Restart — the orchestrator picks it up. Add `JOB_TIMEOUT_MYNEWDOMAIN` and `MAX_CONCURRENT_MYNEWDOMAIN` to `.env` if the defaults don't fit.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Docker Compose                                          │
+│                                                          │
+│  ┌──────────┐    ┌─────────────┐    ┌───────────────┐   │
+│  │ Dashboard│    │Orchestrator │    │     Redis     │   │
+│  │ :5000    │───▶│ auto-disco  │───▶│  queue+state  │   │
+│  │ Flask    │    │ slot mgmt   │    │  result store │   │
+│  └──────────┘    └──────┬──────┘    └───────────────┘   │
+│                         │                                │
+│              ┌──────────▼──────────┐                     │
+│              │  Docker API         │                     │
+│              │  spawn per job      │                     │
+│              └──────────┬──────────┘                     │
+└─────────────────────────┼───────────────────────────────┘
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+   ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+   │worker-fnac  │ │worker-mano  │ │worker-newark│
+   │ 1 job each  │ │ Playwright  │ │ Playwright  │
+   │ 1g RAM cap  │ │ + Xvfb + CF │ │             │
+   └─────────────┘ └─────────────┘ └─────────────┘
+```
+
+## Project structure
+
+```
+├── start.sh / stop.sh        # service management
+├── docker-compose.yml
+├── .env.example
+├── redis_server/
+│   ├── orchestrator.py       # ThreadSafeWorker, domain discovery, crash recovery
+│   ├── main.py               # crawl_job, slot management (Lua), container spawn
+│   └── config.py
+├── Dashboard/
+│   └── app.py                # Flask REST API + web UI
+├── workers/
+│   ├── fnac/
+│   ├── manomano/
+│   ├── orchestra/
+│   ├── newark/
+│   └── Proxy/                # proxy list (Excel)
+└── Run_Test/
+    ├── test_api_job.py
+    └── test_api_batch.py
+```
+
+## Troubleshooting
+
+**Chromium not found**
 ```bash
 sudo snap install chromium
 ```
 
-### Worker image not found
+**Worker image missing / stale**
 ```bash
-# Rebuild thủ công
-docker build -t worker-newark:latest workers/newark/
-# Hoặc restart start.sh — tự build nếu chưa có image
+docker build --no-cache -t worker-manomano:latest workers/manomano/
 ```
 
-### Redis connection error
+**Redis connection refused**
 ```bash
-docker ps  # Verify redis container running
+docker ps   # verify redis container is healthy
+```
+
+**Job stuck in `running`**
+```bash
+./stop.sh && ./start.sh   # orchestrator kills orphan containers on restart
 ```

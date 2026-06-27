@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Distributed Redis Web Crawler</title>
+<meta name="description" content="Self-organizing distributed web crawler — add a Dockerfile, get concurrent scraping with Redis queue, Docker isolation, and real-time monitoring.">
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #080C14;
+    --surface:   #0F1828;
+    --surface2:  #162035;
+    --border:    #1E2E4A;
+    --red:       #DC382D;
+    --red-dim:   #7B1C16;
+    --blue:      #4A9EFF;
+    --green:     #48BB78;
+    --yellow:    #F6C90E;
+    --text:      #E8F0FE;
+    --muted:     #7A8FAD;
+    --code-bg:   #0A1020;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── LAYOUT ── */
+  .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+  .wide      { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+  /* ── HERO ── */
+  .hero {
+    padding: 80px 0 64px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -120px; left: 50%; transform: translateX(-50%);
+    width: 700px; height: 400px;
+    background: radial-gradient(ellipse at center, rgba(220,56,45,0.08) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 28px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: 'Courier New', Courier, monospace;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border: 1px solid;
+  }
+  .badge-red    { background: rgba(220,56,45,0.12); border-color: rgba(220,56,45,0.35); color: #F87171; }
+  .badge-blue   { background: rgba(74,158,255,0.1);  border-color: rgba(74,158,255,0.3);  color: #7EB8FF; }
+  .badge-green  { background: rgba(72,187,120,0.1);  border-color: rgba(72,187,120,0.3);  color: #68D391; }
+  .badge-yellow { background: rgba(246,201,14,0.1);  border-color: rgba(246,201,14,0.3);  color: #F6E05E; }
+  .badge-gray   { background: rgba(122,143,173,0.1); border-color: rgba(122,143,173,0.3); color: #A0AEC0; }
+
+  .hero-eyebrow {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px;
+    color: var(--red);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+
+  h1 {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: clamp(36px, 6vw, 60px);
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    text-wrap: balance;
+    margin-bottom: 20px;
+  }
+  h1 em {
+    font-style: normal;
+    color: var(--red);
+  }
+
+  .hero-sub {
+    font-size: 18px;
+    color: var(--muted);
+    max-width: 580px;
+    line-height: 1.6;
+    margin-bottom: 36px;
+  }
+
+  .hero-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 56px;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+    transition: opacity 0.15s;
+    border: none;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn-primary { background: var(--red); color: #fff; }
+  .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+
+  /* ── TERMINAL ── */
+  .terminal {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+  }
+  .terminal-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: #0D1526;
+    border-bottom: 1px solid var(--border);
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot-red    { background: #FF5F57; }
+  .dot-yellow { background: #FEBC2E; }
+  .dot-green  { background: #28C840; }
+  .terminal-title {
+    flex: 1;
+    text-align: center;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+  }
+  .terminal-body {
+    padding: 20px;
+    min-height: 220px;
+    line-height: 1.8;
+  }
+  .t-prompt { color: var(--green); }
+  .t-cmd    { color: var(--text); }
+  .t-key    { color: var(--blue); }
+  .t-val    { color: var(--yellow); }
+  .t-ok     { color: var(--green); }
+  .t-err    { color: #FC8181; }
+  .t-dim    { color: var(--muted); }
+  .t-line   { display: block; min-height: 1.8em; }
+  .cursor {
+    display: inline-block;
+    width: 8px; height: 14px;
+    background: var(--text);
+    vertical-align: middle;
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  /* ── STAT ROW ── */
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 48px 0;
+  }
+  .stat {
+    background: var(--surface);
+    padding: 20px 24px;
+    text-align: center;
+  }
+  .stat-num {
+    font-family: Georgia, serif;
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+  .stat-num span { color: var(--red); }
+  .stat-label {
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  /* ── SECTION ── */
+  section { padding: 64px 0; border-bottom: 1px solid var(--border); }
+  section:last-child { border-bottom: none; }
+
+  h2 {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: clamp(24px, 4vw, 34px);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+    margin-bottom: 12px;
+    line-height: 1.2;
+  }
+  h3 {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: var(--text);
+  }
+  .section-label {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11px;
+    color: var(--red);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .section-lead {
+    color: var(--muted);
+    font-size: 17px;
+    max-width: 600px;
+    margin-bottom: 40px;
+    line-height: 1.6;
+  }
+
+  /* ── ARCH DIAGRAM ── */
+  .arch {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    flex-wrap: wrap;
+    margin: 40px 0;
+    overflow-x: auto;
+  }
+  .arch-node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    min-width: 110px;
+  }
+  .arch-box {
+    padding: 12px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    white-space: nowrap;
+    width: 110px;
+  }
+  .arch-box.red   { border-color: rgba(220,56,45,0.5); background: rgba(220,56,45,0.07); color: #FC8181; }
+  .arch-box.blue  { border-color: rgba(74,158,255,0.5); background: rgba(74,158,255,0.07); color: #7EB8FF; }
+  .arch-box.green { border-color: rgba(72,187,120,0.5); background: rgba(72,187,120,0.07); color: #68D391; }
+  .arch-icon { font-size: 20px; }
+  .arch-label { font-size: 11px; color: var(--muted); text-align: center; }
+  .arch-arrow {
+    color: var(--muted);
+    font-size: 20px;
+    padding: 0 4px;
+    align-self: center;
+    margin-bottom: 28px;
+  }
+
+  /* ── FEATURES ── */
+  .features {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .feature {
+    padding: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    transition: border-color 0.2s;
+  }
+  .feature:hover { border-color: rgba(220,56,45,0.4); }
+  .feature-icon { font-size: 24px; margin-bottom: 12px; }
+  .feature p { font-size: 14px; color: var(--muted); line-height: 1.6; }
+
+  /* ── CODE BLOCK ── */
+  .code-block {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 16px 0;
+  }
+  .code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: #0D1526;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    font-family: 'Courier New', Courier, monospace;
+  }
+  .code-block pre {
+    padding: 20px;
+    overflow-x: auto;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+  .hl-comment { color: #4A5E7A; }
+  .hl-key     { color: #7EB8FF; }
+  .hl-val     { color: #F6C90E; }
+  .hl-str     { color: #68D391; }
+  .hl-method  { color: #FC8181; }
+  .hl-green   { color: var(--green); }
+
+  /* ── WORKERS TABLE ── */
+  .table-wrap { overflow-x: auto; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  th {
+    text-align: left;
+    padding: 10px 16px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+  }
+  td {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(30,46,74,0.5);
+    color: var(--text);
+    vertical-align: top;
+    font-variant-numeric: tabular-nums;
+  }
+  tr:last-child td { border-bottom: none; }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: 'Courier New', Courier, monospace;
+  }
+  .pill-red    { background: rgba(220,56,45,0.15); color: #FC8181; }
+  .pill-blue   { background: rgba(74,158,255,0.12); color: #7EB8FF; }
+  .pill-green  { background: rgba(72,187,120,0.12); color: #68D391; }
+  .pill-gray   { background: rgba(122,143,173,0.1);  color: #A0AEC0; }
+
+  /* ── API SECTION ── */
+  .api-list { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+  .api-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .method {
+    font-family: 'Courier New', Courier, monospace;
+    font-weight: 700;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    min-width: 42px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .method-get  { background: rgba(72,187,120,0.15); color: #68D391; }
+  .method-post { background: rgba(74,158,255,0.15); color: #7EB8FF; }
+  .api-path {
+    font-family: 'Courier New', Courier, monospace;
+    color: var(--text);
+    flex-shrink: 0;
+    min-width: 240px;
+  }
+  .api-desc { color: var(--muted); }
+
+  /* ── ENV TABLE ── */
+  .env-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  .env-item {
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .env-key {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px;
+    color: var(--yellow);
+    margin-bottom: 4px;
+  }
+  .env-default {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .env-desc { font-size: 13px; color: var(--muted); }
+
+  /* ── FOOTER ── */
+  footer {
+    padding: 40px 0;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    border-top: 1px solid var(--border);
+  }
+  footer a { color: var(--blue); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  /* ── NAV ── */
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(8,12,20,0.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+  }
+  .nav-inner {
+    max-width: 960px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    height: 52px;
+    gap: 32px;
+  }
+  .nav-logo {
+    font-family: 'Courier New', Courier, monospace;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--text);
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .nav-logo span { color: var(--red); }
+  .nav-links {
+    display: flex;
+    gap: 24px;
+    list-style: none;
+    margin-left: auto;
+  }
+  .nav-links a {
+    font-size: 13px;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  .nav-links a:hover { color: var(--text); }
+
+  @media (max-width: 640px) {
+    .nav-links { display: none; }
+    .arch { gap: 8px; }
+    .arch-arrow { display: none; }
+    .api-path { min-width: unset; }
+  }
+</style>
+
+<nav>
+  <div class="nav-inner">
+    <a class="nav-logo" href="#"><span>●</span> redis-crawler</a>
+    <ul class="nav-links">
+      <li><a href="#architecture">Architecture</a></li>
+      <li><a href="#quickstart">Quick Start</a></li>
+      <li><a href="#api">API</a></li>
+      <li><a href="#config">Config</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="container">
+    <div class="badge-row">
+      <span class="badge badge-red">Python 3.11</span>
+      <span class="badge badge-red">Redis 7</span>
+      <span class="badge badge-blue">Docker</span>
+      <span class="badge badge-blue">Playwright</span>
+      <span class="badge badge-green">RQ</span>
+      <span class="badge badge-gray">MIT License</span>
+    </div>
+
+    <p class="hero-eyebrow">Distributed Systems · Web Crawling</p>
+    <h1>Self-organizing<br>web crawler <em>infrastructure</em></h1>
+    <p class="hero-sub">
+      Add a Dockerfile to <code style="font-size:15px;color:#7EB8FF">workers/</code>, get distributed scraping.
+      Redis queues, Docker isolation per job, atomic slot management,
+      Cloudflare bypass — all auto-discovered at startup.
+    </p>
+
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="#quickstart">→ Quick Start</a>
+      <a class="btn btn-outline" href="#architecture">View Architecture</a>
+    </div>
+
+    <!-- TERMINAL DEMO -->
+    <div class="terminal">
+      <div class="terminal-bar">
+        <div class="dot dot-red"></div>
+        <div class="dot dot-yellow"></div>
+        <div class="dot dot-green"></div>
+        <span class="terminal-title">redis-crawler — live demo</span>
+      </div>
+      <div class="terminal-body" id="terminal-body">
+        <span class="t-line"><span class="t-prompt">$</span> <span class="t-cmd" id="t-cmd1"></span><span class="cursor" id="cur1"></span></span>
+        <span class="t-line" id="t-line2" style="display:none"></span>
+        <span class="t-line" id="t-line3" style="display:none"></span>
+        <span class="t-line" id="t-line4" style="display:none"></span>
+        <span class="t-line" id="t-line5" style="display:none"></span>
+        <span class="t-line" id="t-line6" style="display:none"></span>
+        <span class="t-line" id="t-line7" style="display:none"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- STATS -->
+<div class="container">
+  <div class="stat-row">
+    <div class="stat">
+      <div class="stat-num"><span>5</span></div>
+      <div class="stat-label">Domain Workers</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">10</div>
+      <div class="stat-label">Max Concurrent Jobs</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">1<span>GB</span></div>
+      <div class="stat-label">Memory per Container</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num"><span>0</span></div>
+      <div class="stat-label">Hardcoded Domains</div>
+    </div>
+  </div>
+</div>
+
+<!-- ARCHITECTURE -->
+<section id="architecture">
+  <div class="container">
+    <p class="section-label">How it works</p>
+    <h2>Three services, zero manual wiring</h2>
+    <p class="section-lead">
+      Every job flows from a single HTTP call through Redis into an isolated Docker container.
+      The orchestrator auto-discovers your workers — no config file to update.
+    </p>
+
+    <div class="arch">
+      <div class="arch-node">
+        <div class="arch-icon">🖥️</div>
+        <div class="arch-box blue">Client</div>
+        <div class="arch-label">POST /api/submit-job</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node">
+        <div class="arch-icon">⚡</div>
+        <div class="arch-box blue">Dashboard</div>
+        <div class="arch-label">Flask · port 5000</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node">
+        <div class="arch-icon">🗄️</div>
+        <div class="arch-box red">Redis</div>
+        <div class="arch-label">Queue + Results</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node">
+        <div class="arch-icon">🎯</div>
+        <div class="arch-box">Orchestrator</div>
+        <div class="arch-label">Auto-discovers workers</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-node">
+        <div class="arch-icon">🐳</div>
+        <div class="arch-box green">Container</div>
+        <div class="arch-label">1 job · isolated env</div>
+      </div>
+    </div>
+
+    <div class="code-block">
+      <div class="code-header">
+        <span>orchestrator.py — auto-discovery</span>
+      </div>
+      <pre><span class="hl-comment"># Scan workers/ folder — no hardcoded domain list</span>
+<span class="hl-key">for</span> path <span class="hl-key">in</span> Path(<span class="hl-str">"workers/"</span>).iterdir():
+    <span class="hl-key">if</span> (path / <span class="hl-str">"Dockerfile"</span>).exists():
+        domain = path.name
+        <span class="hl-comment"># Spawn MAX_CONCURRENT_{DOMAIN} worker threads</span>
+        <span class="hl-key">for</span> i <span class="hl-key">in</span> range(get_max_concurrent(domain)):
+            Thread(target=run_worker, args=(domain,)).start()</pre>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section>
+  <div class="container">
+    <p class="section-label">Features</p>
+    <h2>Built for production</h2>
+    <p class="section-lead">Not a toy scraper. Real concurrency control, crash recovery, and container isolation.</p>
+
+    <div class="features">
+      <div class="feature">
+        <div class="feature-icon">🔐</div>
+        <h3>Atomic slot management</h3>
+        <p>Lua scripts in Redis enforce per-domain and global concurrency limits atomically — no race conditions, no overcommit.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🐳</div>
+        <h3>Full container isolation</h3>
+        <p>Each job runs in its own Docker container with 1GB RAM cap, 2GB shared memory, and SYS_ADMIN for Chromium sandbox.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🛡️</div>
+        <h3>Cloudflare bypass</h3>
+        <p>Playwright with virtual display, randomized viewports, human-like mouse movement, and Turnstile click automation.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">♻️</div>
+        <h3>Crash recovery</h3>
+        <p>On restart, orphan containers are killed before stale jobs re-queue. No double-spawn, no resource leak.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🔍</div>
+        <h3>Zero-config discovery</h3>
+        <p>Drop a Dockerfile into <code style="color:#7EB8FF;font-size:12px">workers/mynewdomain/</code> and restart. The orchestrator picks it up automatically.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📊</div>
+        <h3>Real-time dashboard</h3>
+        <p>Flask UI with paginated job lists, result viewer, per-domain stats, and one-click clear by state.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- QUICK START -->
+<section id="quickstart">
+  <div class="container">
+    <p class="section-label">Getting started</p>
+    <h2>Up in three commands</h2>
+
+    <div class="code-block">
+      <div class="code-header"><span>1 — Clone & configure</span></div>
+      <pre><span class="hl-comment"># Clone the repository</span>
+git clone https://github.com/xuandich/Redis-Server.git
+cd Redis-Server
+
+<span class="hl-comment"># Copy and edit your environment</span>
+cp .env.example .env</pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-header"><span>2 — Start everything</span></div>
+      <pre><span class="hl-comment"># Start Redis + Orchestrator + Dashboard</span>
+<span class="hl-comment"># Worker images are built automatically if not cached</span>
+./start.sh
+
+<span class="hl-comment"># Dashboard is live at:</span>
+<span class="hl-green">→  http://localhost:5000</span></pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-header"><span>3 — Submit a crawl job</span></div>
+      <pre>curl -X POST http://localhost:5000/api/submit-job \
+  -H <span class="hl-str">"Content-Type: application/json"</span> \
+  -d <span class="hl-str">'{
+    "url": "https://www.manomano.fr/p/example-product-123",
+    "domain": "manomano"
+  }'</span>
+
+<span class="hl-comment"># Response:</span>
+{
+  <span class="hl-key">"ret_key"</span>: <span class="hl-str">"ret_manomano_f3a2b1c0-..."</span>,
+  <span class="hl-key">"status"</span>: <span class="hl-str">"queued"</span>
+}</pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-header"><span>4 — Fetch the result</span></div>
+      <pre>curl http://localhost:5000/api/job/ret_manomano_f3a2b1c0-...
+
+{
+  <span class="hl-key">"status"</span>: <span class="hl-str">"success"</span>,
+  <span class="hl-key">"http_code"</span>: <span class="hl-val">200</span>,
+  <span class="hl-key">"html"</span>: <span class="hl-str">"&lt;!DOCTYPE html&gt;..."</span>,
+  <span class="hl-key">"elapsed_ms"</span>: <span class="hl-val">4821</span>,
+  <span class="hl-key">"domain"</span>: <span class="hl-str">"manomano"</span>
+}</pre>
+    </div>
+  </div>
+</section>
+
+<!-- WORKERS -->
+<section>
+  <div class="container">
+    <p class="section-label">Supported Domains</p>
+    <h2>Five workers out of the box</h2>
+    <p class="section-lead">Each worker is a standalone Docker image with its own browser automation strategy.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Domain</th>
+            <th>Browser</th>
+            <th>CF Bypass</th>
+            <th>Max Concurrent</th>
+            <th>Timeout</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="pill pill-blue">fnac</span></td>
+            <td>Playwright</td>
+            <td><span class="pill pill-green">Yes</span></td>
+            <td>5</td>
+            <td>120s</td>
+          </tr>
+          <tr>
+            <td><span class="pill pill-blue">manomano</span></td>
+            <td>Playwright + Xvfb</td>
+            <td><span class="pill pill-green">Yes (Turnstile)</span></td>
+            <td>3</td>
+            <td>300s</td>
+          </tr>
+          <tr>
+            <td><span class="pill pill-blue">orchestra</span></td>
+            <td>undetected-chrome</td>
+            <td><span class="pill pill-green">Yes</span></td>
+            <td>3</td>
+            <td>180s</td>
+          </tr>
+          <tr>
+            <td><span class="pill pill-blue">newark</span></td>
+            <td>Playwright</td>
+            <td><span class="pill pill-gray">Partial</span></td>
+            <td>3</td>
+            <td>720s</td>
+          </tr>
+          <tr>
+            <td><span class="pill pill-gray">amazon</span></td>
+            <td>—</td>
+            <td><span class="pill pill-gray">—</span></td>
+            <td>3</td>
+            <td>120s</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- API -->
+<section id="api">
+  <div class="container">
+    <p class="section-label">REST API</p>
+    <h2>Full HTTP interface</h2>
+    <p class="section-lead">All dashboard functionality is exposed as a JSON API. Build your own client on top.</p>
+
+    <ul class="api-list">
+      <li class="api-item">
+        <span class="method method-post">POST</span>
+        <span class="api-path">/api/submit-job</span>
+        <span class="api-desc">Submit a new crawl job. Returns <code style="color:#7EB8FF;font-size:12px">ret_key</code> for polling.</span>
+      </li>
+      <li class="api-item">
+        <span class="method method-get">GET</span>
+        <span class="api-path">/api/job/&lt;ret_key&gt;</span>
+        <span class="api-desc">Fetch result for a specific job by its return key.</span>
+      </li>
+      <li class="api-item">
+        <span class="method method-get">GET</span>
+        <span class="api-path">/api/jobs/&lt;state&gt;</span>
+        <span class="api-desc">Paginated list of jobs by state: <code style="color:#F6C90E;font-size:12px">queued · running · finished · failed</code></span>
+      </li>
+      <li class="api-item">
+        <span class="method method-get">GET</span>
+        <span class="api-path">/api/stats</span>
+        <span class="api-desc">Aggregate counts by state and domain, success rate.</span>
+      </li>
+      <li class="api-item">
+        <span class="method method-get">GET</span>
+        <span class="api-path">/api/workers</span>
+        <span class="api-desc">List of active RQ workers and their current job.</span>
+      </li>
+      <li class="api-item">
+        <span class="method method-post">POST</span>
+        <span class="api-path">/api/clear_state/&lt;state&gt;</span>
+        <span class="api-desc">Bulk-delete all jobs in a given state from Redis.</span>
+      </li>
+      <li class="api-item">
+        <span class="method method-post">POST</span>
+        <span class="api-path">/api/cancel/&lt;ret_key&gt;</span>
+        <span class="api-desc">Cancel a queued job before it starts.</span>
+      </li>
+      <li class="api-item">
+        <span class="method method-post">POST</span>
+        <span class="api-path">/api/delete/&lt;ret_key&gt;</span>
+        <span class="api-desc">Delete job state and result from Redis.</span>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<!-- CONFIG -->
+<section id="config">
+  <div class="container">
+    <p class="section-label">Configuration</p>
+    <h2>Environment variables</h2>
+    <p class="section-lead">Copy <code style="color:#7EB8FF">.env.example</code> to <code style="color:#7EB8FF">.env</code> and adjust. Per-domain overrides follow the <code style="color:#F6C90E">_{DOMAIN}</code> suffix pattern.</p>
+
+    <div class="env-grid">
+      <div class="env-item">
+        <div class="env-key">REDIS_HOST</div>
+        <div class="env-default">default: redis</div>
+        <div class="env-desc">Redis hostname inside the Docker network.</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">JOB_TIMEOUT_DEFAULT</div>
+        <div class="env-default">default: 120</div>
+        <div class="env-desc">Seconds before <code style="font-size:12px;color:#F6C90E">container.wait()</code> kills the container. Override per-domain with <code style="font-size:12px;color:#F6C90E">JOB_TIMEOUT_MANOMANO=300</code>.</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">RESULT_TTL</div>
+        <div class="env-default">default: 3600</div>
+        <div class="env-desc">Seconds to keep job results in Redis before auto-expiry.</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">MAX_CONCURRENT_TOTAL</div>
+        <div class="env-default">default: 10</div>
+        <div class="env-desc">Global hard cap on simultaneous running containers across all domains.</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">MAX_CONCURRENT_{DOMAIN}</div>
+        <div class="env-default">default: 5</div>
+        <div class="env-desc">Per-domain container limit. E.g. <code style="font-size:12px;color:#F6C90E">MAX_CONCURRENT_MANOMANO=3</code>.</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">PROXY_HOST_DIR</div>
+        <div class="env-default">default: —</div>
+        <div class="env-desc">Host path to the Proxy folder. Mounted read-only into each worker container at <code style="font-size:12px;color:#F6C90E">/app/Proxy</code>.</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">CONTAINER_MEM_LIMIT</div>
+        <div class="env-default">default: 1g</div>
+        <div class="env-desc">Docker memory limit per worker container.</div>
+      </div>
+      <div class="env-item">
+        <div class="env-key">CONTAINER_SHM_SIZE</div>
+        <div class="env-default">default: 2g</div>
+        <div class="env-desc">Shared memory for Chromium. Must exceed 512MB for stable browser operation.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ADD A WORKER -->
+<section>
+  <div class="container">
+    <p class="section-label">Extensibility</p>
+    <h2>Adding a new domain worker</h2>
+    <p class="section-lead">The system is designed so that one developer can add a new scraper in under an hour.</p>
+
+    <div class="code-block">
+      <div class="code-header"><span>Directory structure — workers/mynewdomain/</span></div>
+      <pre>workers/
+└── mynewdomain/
+    ├── <span class="hl-green">Dockerfile</span>          <span class="hl-comment"># triggers auto-discovery</span>
+    ├── run.py              <span class="hl-comment"># entry point — reads URL, RET_KEY from env</span>
+    └── sourceCode/
+        ├── main.py         <span class="hl-comment"># async process_single_request(request)</span>
+        ├── extractor.py    <span class="hl-comment"># your scraping logic</span>
+        └── requirements.txt</pre>
+    </div>
+
+    <p style="color:var(--muted);font-size:14px;margin-top:12px">
+      The worker reads <code style="color:#7EB8FF;font-size:13px">URL</code>, <code style="color:#7EB8FF;font-size:13px">RET_KEY</code>, <code style="color:#7EB8FF;font-size:13px">REDIS_HOST</code> from environment variables,
+      and writes its result to <code style="color:#F6C90E;font-size:13px">result:{ret_key}</code> in Redis before exiting.
+      The orchestrator handles everything else.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <p style="margin-bottom:8px">
+      Built with Redis · RQ · Docker · Playwright · Flask
+    </p>
+    <p>
+      <a href="https://github.com/xuandich/Redis-Server">github.com/xuandich/Redis-Server</a>
+    </p>
+  </div>
+</footer>
+
+<script>
+  // Terminal animation
+  const lines = [
+    { id: 'cmd1', type: 'type', text: 'curl -X POST localhost:5000/api/submit-job -d \'{"url":"https://manomano.fr/p/produit-123","domain":"manomano"}\'', delay: 60 },
+    { id: 'line2', type: 'show', html: '<span class="t-dim">{</span> <span class="t-key">"ret_key"</span>: <span class="t-val">"ret_manomano_f3a2b1c0"</span>, <span class="t-key">"status"</span>: <span class="t-val">"queued"</span> <span class="t-dim">}</span>' },
+    { id: 'line3', type: 'show', html: '' },
+    { id: 'line4', type: 'show', html: '<span class="t-prompt">$</span> <span class="t-cmd">curl localhost:5000/api/job/ret_manomano_f3a2b1c0</span>' },
+    { id: 'line5', type: 'show', html: '<span class="t-dim"># waiting for container...</span>' },
+    { id: 'line6', type: 'show', html: '<span class="t-ok">✓</span> <span class="t-key">"status"</span>: <span class="t-val">"success"</span>  <span class="t-key">"http_code"</span>: <span class="t-val">200</span>  <span class="t-key">"html"</span>: <span class="t-val">"485,106 bytes"</span>' },
+    { id: 'line7', type: 'show', html: '<span class="t-ok">✓</span> <span class="t-key">"elapsed_ms"</span>: <span class="t-val">4821</span>  <span class="t-key">"proxy_used"</span>: <span class="t-val">"direct"</span>  <span class="t-key">"domain"</span>: <span class="t-val">"manomano"</span>' },
+  ];
+
+  let step = 0;
+  function runStep() {
+    if (step >= lines.length) return;
+    const l = lines[step++];
+
+    if (l.type === 'type') {
+      const el = document.getElementById('t-cmd1');
+      const cur = document.getElementById('cur1');
+      let i = 0;
+      const iv = setInterval(() => {
+        el.textContent += l.text[i++];
+        if (i >= l.text.length) {
+          clearInterval(iv);
+          cur.style.display = 'none';
+          setTimeout(runStep, 400);
+        }
+      }, 22);
+    } else {
+      const el = document.getElementById(l.id);
+      el.innerHTML = l.html;
+      el.style.display = 'block';
+      setTimeout(runStep, l.id === 'line5' ? 900 : 200);
+    }
+  }
+
+  setTimeout(runStep, 800);
+</script>
+</head><body>
+</body></html>
