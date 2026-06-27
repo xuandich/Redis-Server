@@ -6,7 +6,7 @@ export const meta = {
 
 // args: mảng finding (1 BATCH ~10-12 cái) lấy từ results/findings-pending.json.
 //   Mỗi finding: {title, severity, file_line, description, why_real, dimension, maybe_duplicate_of}
-const REPO = '/home/xuandich/CODE/PO/Redis_Server'
+const REPO = 'thư mục repo hiện tại (CWD của bạn — repo root)'
 const CONTEXT = 'Reviews_Project/audit/00-context.md'
 const READ_INSTR = `Bạn đang audit hệ Redis+RQ crawler tại ${REPO} (CWD = repo root).
 ĐỌC TRƯỚC: ${CONTEXT}. Dùng Read/Grep/Bash, đường dẫn tương đối từ repo root.
@@ -26,12 +26,17 @@ const VERDICT_SCHEMA = {
 
 let parsed = args
 if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed) } catch (e) { parsed = null } }
-const batch = Array.isArray(parsed) ? parsed : (parsed && parsed.findings) || []
-log(`args type=${typeof args}, batch=${batch.length}`)
-if (!batch.length) {
-  log('Batch rỗng. Truyền args=<mảng finding> (lấy ~12 cái từ results/findings-pending.json).')
+const allBatch = Array.isArray(parsed) ? parsed : (parsed && parsed.findings) || []
+if (!allBatch.length) {
+  log('Batch rỗng. Truyền args=<mảng finding> (lấy ~6 cái từ results/findings-pending.json).')
   return { phase: 'audit-verify', error: 'empty batch', verdicts: [] }
 }
+
+// GUARD cỡ-mẻ: tối đa 6 finding/lần để không chạm session-limit. Phần dư trả về `deferred` → chạy lại.
+const MAX_BATCH = 6
+const batch = allBatch.slice(0, MAX_BATCH)
+const deferred = allBatch.slice(MAX_BATCH)
+log(`args type=${typeof args}, batch=${batch.length}/${allBatch.length}` + (deferred.length ? ` — CÒN ${deferred.length} deferred → chạy lại` : ''))
 
 phase('Adversarial Verify')
 const verdicts = await parallel(batch.map((f, i) => () =>
@@ -52,4 +57,5 @@ return {
   confirmedNew: confirmedNew.map(v => ({ ...v.finding, verdict: v.verdict })),
   rejected: ok.filter(v => !(v.verdict && v.verdict.is_real && v.verdict.is_new && v.verdict.severity !== 'refuted'))
     .map(v => ({ title: v.finding.title, file_line: v.finding.file_line, verdict: v.verdict })),
+  deferred,
 }

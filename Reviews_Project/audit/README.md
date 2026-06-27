@@ -4,6 +4,10 @@ Bộ khung re-audit chia thành **5 pha độc lập**, mỗi pha là 1 script w
 
 > Bối cảnh: lần chạy gộp 67-agent (`wf_2a6903b4`) bị cắt vì 37 agent verify chết ở session limit. Tách find↔verify + chunk-được khắc phục triệt để.
 
+## 🧭 Bắt đầu / quay lại ở đây: [`STATE.md`](STATE.md)
+
+`STATE.md` = trạng thái LIVE của chu trình: pha nào ✅ xong / 🟡 dở (kèm lệnh chạy tiếp) / ⬜ chưa chạy, hàng đợi `findings-pending.json`, và "việc tiếp theo". **Đọc nó ĐẦU TIÊN** khi mở lại để biết resume từ đâu. **Main loop CẬP NHẬT `STATE.md` sau MỖI `Workflow()` return** (checkpoint) — đây là cách lưu "đã hoàn thành + chưa hoàn thành để chạy tiếp".
+
 ## Quy tắc chung
 
 - Mọi agent đọc [`00-context.md`](00-context.md) trước (file map, danh sách bug, fix gần đây, quy ước).
@@ -35,15 +39,15 @@ Chunk: chạy 2-3 lần, mỗi lần vài nhóm. → `results/phase2-reconcile_<
 
 ### Pha 4 — audit-find  `phase4-audit-find.workflow.js`
 Fan-out tìm bug MỚI theo dimension (CHỈ tìm, chưa verify).
-`args`: mảng `[{key, prompt}]` hoặc bỏ trống = 8 dimension mặc định. Chunk: chạy theo nhóm dimension.
+`args`: mảng `[{key, prompt}]` hoặc bỏ trống = 8 dimension mặc định. **Script tự cắt ≤3 dim/lần, trả `deferred`** → chạy lại với `args=deferred`.
 → main loop gộp findings ghi `results/findings-pending.json` (hàng đợi chờ verify).
 
 ### Pha 5 — audit-verify  `phase5-audit-verify.workflow.js`
 Adversarial verify (cố bác bỏ) + dedup từng finding. **Chạy nhiều lần tới cạn.**
-`args`: mảng finding (1 batch, ~10-12 cái) lấy từ `results/findings-pending.json`.
+`args`: mảng finding lấy từ `results/findings-pending.json`. **Script tự cắt ≤6 cái/lần, trả `deferred`.**
 Vòng lặp do main loop điều phối:
-1. Đọc `findings-pending.json`, lấy ~12 cái đầu làm `args`.
-2. Chạy pha 5 → nhận verdicts → append `results/verdicts.json`, xoá 12 cái đã verify khỏi pending.
+1. Đọc `findings-pending.json`, lấy ~6 cái đầu làm `args`.
+2. Chạy pha 5 → nhận verdicts → append `results/verdicts.json`, xoá số đã verify khỏi pending.
 3. Lặp tới khi pending rỗng.
 → finding `is_real && is_new` → tạo `Bugs/BUG-XX`; bị bác → ghi mục "đã bác bỏ" của review.
 
@@ -64,5 +68,17 @@ Nếu không có thay đổi trong `workers/*/sourceCode | run.py | Dockerfile` 
 ## Sau khi xong các pha
 Main loop tổng hợp `results/*` → viết snapshot review mới `Reviews_Project/<date>_flow-audit.md` (theo format các file cũ) + cập nhật `00-context.md` §4/§5.
 
-## Cỡ mỗi pha (để không vỡ limit)
-P1 ~4-6 · P2 ~9 (chunk được) · P3 ~3 · P4 ~8 (chunk được) · P5 ~10-12/lần (lặp) · P6 ~1/domain (chỉ khi worker đổi). Không pha nào gộp find+verify nữa.
+## Cỡ mỗi pha (để không vỡ limit) — ĐÃ SIẾT 2026-06-27
+
+> Bối cảnh: audit 06-27 gộp find+verify vào 1 workflow 34-agent/1.08M token → connection-drop + session-limit. Bài học: **mẻ nhỏ + checkpoint ra disk sau mỗi mẻ**.
+
+**Ngưỡng cứng mỗi `Workflow()` (script tự cắt, trả phần dư qua field `deferred`):**
+- **P4 find**: ≤ **3 dimension**/lần (`MAX_DIMS_PER_RUN=3`). 8 dim mặc định → ~3 lần chạy.
+- **P5 verify**: ≤ **6 finding**/lần (`MAX_BATCH=6`). Lặp tới cạn `findings-pending.json`.
+- **P2 reconcile**: ≤ **3 nhóm**/lần (`MAX_GROUPS_PER_RUN=3`).
+- P1 ~4-6 · P3 ~3 · P6 ~1/domain — vốn đã nhỏ, không cần guard.
+
+**Cơ chế `deferred`**: nếu truyền nhiều hơn ngưỡng, script CHỈ chạy mẻ đầu + trả `deferred` = phần còn lại. Main loop chạy lại pha đó với `args = deferred` (hoặc lấy tiếp từ pending). Mất tối đa **1 mẻ** nếu đứt giữa chừng.
+
+### ⛔ QUY TẮC TUYỆT ĐỐI: KHÔNG gộp find ↔ verify vào 1 workflow
+Find (P4/P6) ghi `findings-pending.json` NGAY → verify (P5) đọc từng mẻ ≤6 → mỗi mẻ xong **append `verdicts.json` + xóa khỏi pending**. Gộp 2 pha = mất sạch khi limit-hit (lỗi 06-27). Checkpoint ra disk sau MỖI `Workflow()` return, không gom cuối.

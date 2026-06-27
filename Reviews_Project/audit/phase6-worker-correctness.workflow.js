@@ -10,7 +10,7 @@ export const meta = {
 //
 // args: ["fnac","newark"]  hoặc  [{domain:"fnac"}]  hoặc  {domains:[...]} ;
 //       bỏ args = mặc định fnac+newark.  {domains:[]} = no-op (validate parse).
-const REPO = '/home/xuandich/CODE/PO/Redis_Server'
+const REPO = 'thư mục repo hiện tại (CWD của bạn — repo root)'
 const CONTEXT = 'Reviews_Project/audit/00-context.md'
 const READ_INSTR = `Bạn đang audit hệ Redis+RQ crawler tại ${REPO} (CWD = repo root).
 ĐỌC TRƯỚC: ${CONTEXT}. Dùng Read/Grep/Bash, đường dẫn tương đối từ repo root. Trích file:line.`

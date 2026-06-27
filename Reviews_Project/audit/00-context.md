@@ -20,6 +20,7 @@ Hệ Redis + RQ (Redis Queue) crawler phân tán, chạy bằng Docker Compose. 
 | `Dashboard/app.py` | Flask API:5000 — submit-job, hiển thị/monitor, clear/stop. `redis_conn` dùng `decode_responses=True`. |
 | `workers/{fnac,newark}/run.py` | Entrypoint container: đọc env URL/RET_KEY/PROXY_TYPE/REDIS_*, gọi sourceCode crawl, ghi `result:{ret_key}`. |
 | `workers/{fnac,newark}/sourceCode/` | Logic crawl thật (Playwright + proxy). fnac: `HtmlFetchResult.to_dict()`. newark: dict literal. |
+| `workers/{manomano,orchestra}/` | **Worker MỚI (06-26/27)** — undetected_chromedriver + Selenium (KHÁC Playwright), Xvfb (entrypoint.sh), Chrome trong-image `/usr/bin/google-chrome`. orchestra ghi thêm `title`/`price`. **Nhiều bug false-success/timeout: BUG-69..76.** |
 | `docker-compose.yml`, `start.sh`, `stop.sh`, `setup_systemd.sh` | Orchestration/deploy. compose KHÔNG set project `name:`. |
 
 ## 3. Invariant & cơ chế cốt lõi
@@ -47,11 +48,11 @@ Hệ Redis + RQ (Redis Queue) crawler phân tán, chạy bằng Docker Compose. 
 ## 5. Quy ước
 
 - **Severity**: critical / high / medium / low / nit. Verdict thêm: refuted.
-- **Bug mới**: ID kế tiếp = (max trong `ls Bugs/`) + 1. Hiện cao nhất **BUG-68** → mới bắt đầu từ **BUG-69**.
+- **Bug mới**: ID kế tiếp = (max trong `ls Bugs/`) + 1. Hiện cao nhất **BUG-80** → mới bắt đầu từ **BUG-81**.
 - **Đánh dấu fixed**: đổi tên file `BUG-XX_...md` → `BUG-XX(FIXED)_...md` (git mv) + sửa field `**Status**: FIXED (ngày)` + thêm mục `## Fix Applied`.
 - **Result schema** (worker ghi): `{url, html, headers, http_code, cookies, elapsed_ms, error, status}` + (fnac) `ret_key, total_elapsed_seconds, mode, proxy_type, log`. Top-level `domain`/`timestamp` do orchestrator backfill (BUG-24).
 - **Dedup finding mới**: so với `ls Bugs/` — nếu trùng claim/file/cơ chế của BUG-XX đã có thì `is_new=false`.
 
 ## 6. Bảo trì file này
 
-Sau mỗi đợt fix: (a) thêm dòng vào §4, (b) cập nhật "ID cao nhất" ở §5, (c) nếu cơ chế cốt lõi đổi thì sửa §3. Lịch sử review: `Reviews_Project/2026-06-19`, `2026-06-23`, `2026-06-26`.
+Sau mỗi đợt fix: (a) thêm dòng vào §4, (b) cập nhật "ID cao nhất" ở §5, (c) nếu cơ chế cốt lõi đổi thì sửa §3. Lịch sử review: `Reviews_Project/2026-06-19`, `2026-06-23`, `2026-06-26`, `2026-06-27` (audit 2 worker mới manomano/orchestra → BUG-69..76).

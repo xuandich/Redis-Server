@@ -5,7 +5,7 @@ export const meta = {
 }
 
 // args: [{key, prompt}]  hoặc bỏ trống = 8 dimension mặc định. Chunk: truyền subset để chạy mẻ nhỏ.
-const REPO = '/home/xuandich/CODE/PO/Redis_Server'
+const REPO = 'thư mục repo hiện tại (CWD của bạn — repo root)'
 const CONTEXT = 'Reviews_Project/audit/00-context.md'
 const READ_INSTR = `Bạn đang audit hệ Redis+RQ crawler tại ${REPO} (CWD = repo root).
 ĐỌC TRƯỚC: ${CONTEXT} (file map, danh sách bug + trạng thái, fix gần đây, quy ước). Dùng Read/Grep/Bash, đường dẫn tương đối từ repo root.
@@ -47,9 +47,15 @@ const DEFAULT_DIMENSIONS = [
 
 let A = args
 if (typeof A === 'string') { try { A = JSON.parse(A) } catch (e) { A = null } }
-const dims = (Array.isArray(A) && A.length) ? A
+const allDims = (Array.isArray(A) && A.length) ? A
   : (A && Array.isArray(A.dimensions) && A.dimensions.length) ? A.dimensions
   : DEFAULT_DIMENSIONS
+
+// GUARD cỡ-mẻ: tối đa 3 dimension/lần để không chạm session-limit. Phần dư trả về `deferred` → chạy lại.
+const MAX_DIMS_PER_RUN = 3
+const dims = allDims.slice(0, MAX_DIMS_PER_RUN)
+const deferred = allDims.slice(MAX_DIMS_PER_RUN)
+if (deferred.length) log(`⚠️ Mẻ này chạy ${dims.length}/${allDims.length} dimension. CÒN ${deferred.length} → chạy lại pha 4 với args = phần deferred (xem field "deferred" trong kết quả).`)
 
 phase('Audit Find')
 const perDim = await parallel(dims.map(d => () =>
@@ -61,4 +67,4 @@ const perDim = await parallel(dims.map(d => () =>
 const findings = perDim.filter(Boolean).flatMap(r =>
   (r.findings || []).map(f => ({ ...f, dimension: r.dimension })))
 
-return { phase: 'audit-find', dimensions: dims.map(d => d.key), count: findings.length, findings }
+return { phase: 'audit-find', dimensions: dims.map(d => d.key), count: findings.length, findings, deferred }

@@ -7,7 +7,7 @@ export const meta = {
 // args:
 //   [{label:"dash", ids:"16,29,48", focus:"Dashboard/app.py submit + clear"}]  (nhóm — KHUYẾN NGHỊ)
 //   hoặc ["16","17","18"]  (gộp 1 nhóm adhoc)
-const REPO = '/home/xuandich/CODE/PO/Redis_Server'
+const REPO = 'thư mục repo hiện tại (CWD của bạn — repo root)'
 const CONTEXT = 'Reviews_Project/audit/00-context.md'
 const READ_INSTR = `Bạn đang audit hệ Redis+RQ crawler tại ${REPO} (CWD = repo root).
 ĐỌC TRƯỚC: ${CONTEXT}. Dùng Read/Grep/Bash, đường dẫn tương đối từ repo root.
@@ -46,6 +46,13 @@ if (!groups.length) {
   return { phase: 'reconcile-bugs', error: 'no bugs', bugs: [] }
 }
 
+// GUARD cỡ-mẻ: tối đa 3 nhóm/lần. Phần dư trả về `deferred` → chạy lại.
+const MAX_GROUPS_PER_RUN = 3
+const allGroups = groups
+groups = allGroups.slice(0, MAX_GROUPS_PER_RUN)
+const deferred = allGroups.slice(MAX_GROUPS_PER_RUN)
+if (deferred.length) log(`⚠️ Mẻ này chạy ${groups.length}/${allGroups.length} nhóm. CÒN ${deferred.length} → chạy lại với phần deferred.`)
+
 phase('Reconcile')
 const perGroup = await parallel(groups.map(g => () =>
   agent(
@@ -58,4 +65,4 @@ const perGroup = await parallel(groups.map(g => () =>
 ))
 
 const bugs = perGroup.filter(Boolean).flatMap(r => r.bugs || [])
-return { phase: 'reconcile-bugs', groups: groups.map(g => g.label), bugs }
+return { phase: 'reconcile-bugs', groups: groups.map(g => g.label), bugs, deferred }

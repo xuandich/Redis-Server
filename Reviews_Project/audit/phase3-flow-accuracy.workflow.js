@@ -6,7 +6,7 @@ export const meta = {
 
 // args: [{area, prompt}]  hoặc bỏ trống = 3 area mặc định.
 //   Có thể truyền {doc:"Reviews_Project/2026-06-26_flow-audit.md"} để đổi doc đối chiếu.
-const REPO = '/home/xuandich/CODE/PO/Redis_Server'
+const REPO = 'thư mục repo hiện tại (CWD của bạn — repo root)'
 const CONTEXT = 'Reviews_Project/audit/00-context.md'
 let A = args
 if (typeof A === 'string') { try { A = JSON.parse(A) } catch (e) { A = null } }

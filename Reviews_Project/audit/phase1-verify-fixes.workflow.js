@@ -5,7 +5,7 @@ export const meta = {
 }
 
 // args: ["BUG-13","BUG-60"]  hoặc  [{id:"BUG-13", focus:"orchestrator.py start_worker_for_domain"}]
-const REPO = '/home/xuandich/CODE/PO/Redis_Server'
+const REPO = 'thư mục repo hiện tại (CWD của bạn — repo root)'
 const CONTEXT = 'Reviews_Project/audit/00-context.md'
 const READ_INSTR = `Bạn đang audit hệ Redis+RQ crawler tại ${REPO} (CWD = repo root).
 ĐỌC TRƯỚC: ${CONTEXT} (file map, danh sách bug, fix gần đây, quy ước). Dùng Read/Grep/Bash, đường dẫn tương đối từ repo root.
