@@ -1,248 +1,304 @@
-import asyncio
 import os
 import random
-import re
-import subprocess
 import time
 from typing import List, Optional
 
-import undetected_chromedriver as uc
-from asyncio import Semaphore
-from selenium.webdriver.support.ui import WebDriverWait
+from playwright.async_api import async_playwright, Playwright, Browser
+from pyvirtualdisplay import Display
 
 from utils import mask_proxy_password, parse_proxy
 from models import HtmlFetchResult
 
 
-def _get_chrome_major_version() -> Optional[int]:
-    try:
-        out = subprocess.check_output(['google-chrome', '--version'], stderr=subprocess.DEVNULL).decode()
-        return int(re.search(r'(\d+)\.', out).group(1))
-    except Exception:
-        return None
-
-
-def _create_proxy_auth_extension(host: str, port: str, username: str, password: str) -> Optional[str]:
-    """Tạo Chrome extension tạm để xác thực proxy (chỉ hoạt động non-headless)."""
-    import tempfile, zipfile
-    manifest = """{
-  "version": "1.0.0",
-  "manifest_version": 2,
-  "name": "Proxy Auth",
-  "permissions": ["proxy", "tabs", "unlimitedStorage", "storage", "<all_urls>", "webRequest", "webRequestBlocking"],
-  "background": {"scripts": ["background.js"]},
-  "minimum_chrome_version": "22.0.0"
-}"""
-    background = f"""var config = {{
-  mode: "fixed_servers",
-  rules: {{
-    singleProxy: {{ scheme: "http", host: "{host}", port: parseInt("{port}") }},
-    bypassList: ["localhost"]
-  }}
-}};
-chrome.proxy.settings.set({{value: config, scope: "regular"}}, function(){{}});
-function callbackFn(details) {{
-  return {{ authCredentials: {{ username: "{username}", password: "{password}" }} }};
-}}
-chrome.webRequest.onAuthRequired.addListener(callbackFn,
-  {{urls: ["<all_urls>"]}},
-  ["blocking"]
-);"""
-    try:
-        ext_dir = tempfile.mkdtemp(prefix='proxy_ext_')
-        zip_path = os.path.join(ext_dir, 'proxy_auth.zip')
-        with zipfile.ZipFile(zip_path, 'w') as zf:
-            zf.writestr('manifest.json', manifest)
-            zf.writestr('background.js', background)
-        import zipfile as zf2
-        with zf2.ZipFile(zip_path, 'r') as z:
-            z.extractall(ext_dir)
-        os.remove(zip_path)
-        return ext_dir
-    except Exception:
-        return None
-
+def _country_flag(code: str) -> str:
+    if not code or len(code) != 2:
+        return ''
+    return chr(0x1F1E6 + ord(code[0].upper()) - ord('A')) + chr(0x1F1E6 + ord(code[1].upper()) - ord('A'))
 
 
 class ManomanoFetcher:
-    def __init__(self, proxy_list: List[str], worker_id: int = 0,
-                 semaphore: Semaphore = None):
-        self.driver = None
+    def __init__(self, proxy_list: List[str]):
+        self._playwright: Optional[Playwright] = None
+        self._browser: Optional[Browser] = None
+        self._display: Optional[Display] = None
         self.proxies = proxy_list.copy()
-        random.shuffle(self.proxies)
-        self.current_proxy = None
-        self.worker_id = worker_id
-        self.semaphore = semaphore
         self.log_buffer: List[str] = []
-        self._ext_dir: Optional[str] = None
+        self.chromium_path = os.environ.get('CHROMIUM_PATH') or None
 
     def add_log(self, msg: str):
         self.log_buffer.append(msg)
-        print(f"[manomano-{self.worker_id}] {msg}")
+        print(msg)
 
-    def get_next_proxy(self) -> Optional[str]:
-        if not self.proxies:
-            return None
-        proxy = random.choice(self.proxies)
-        self.add_log(f"🔀 Proxy: {mask_proxy_password(proxy)}")
-        return proxy
+    def _start_display(self):
+        if self._display is None:
+            wsize = random.choice([(1920, 1080), (1366, 768), (1440, 900)])
+            self._display = Display(visible=False, size=wsize)
+            self._display.start()
+            self.add_log(f"🖥️ Virtual display {wsize[0]}x{wsize[1]}")
 
-    def _cleanup_ext_dir(self):
-        if self._ext_dir and os.path.exists(self._ext_dir):
+    def _stop_display(self):
+        if self._display:
             try:
-                import shutil
-                shutil.rmtree(self._ext_dir, ignore_errors=True)
+                self._display.stop()
             except Exception:
                 pass
-            self._ext_dir = None
+            self._display = None
 
-    def _start_driver_sync(self, proxy_string: Optional[str] = None) -> bool:
-        """Sync — khởi động undetected_chromedriver (chạy trong thread)"""
+    async def _check_proxy_country(self):
+        """Kiểm tra IP thực tế và country qua proxy đang dùng."""
         try:
-            if self.driver:
-                try:
-                    self.driver.quit()
-                except Exception:
-                    pass
-                self.driver = None
-            self._cleanup_ext_dir()
+            context = await self._browser.new_context()
+            page = await context.new_page()
+            response = await page.goto('https://ipwho.is/', timeout=10000)
+            data = await response.json()
+            await context.close()
+            ip = data.get('ip', '?')
+            country = data.get('country', '?')
+            flag = _country_flag(data.get('country_code', ''))
+            self.add_log(f"🌍 IP: {ip} | {country} {flag}")
+        except Exception as e:
+            self.add_log(f"🌍 IP check thất bại: {e}")
 
-            options = uc.ChromeOptions()
-            options.binary_location = '/usr/bin/google-chrome'
-            # Chỉ giữ flags thực sự cần thiết trong Docker — tránh flags headless-like
-            # mà Cloudflare dùng để nhận diện bot
-            options.add_argument('--no-sandbox')
-            options.add_argument('--disable-dev-shm-usage')
-            options.add_argument('--disable-setuid-sandbox')
-            options.add_argument('--disable-gpu')
-            # Random window size để tránh fingerprint cố định
-            wsize = random.choice(['1920,1080', '1366,768', '1440,900', '1536,864', '1280,800'])
-            options.add_argument(f'--window-size={wsize}')
-            options.add_argument('--lang=fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7')
+    async def _start_browser(self, proxy_string: Optional[str] = None) -> bool:
+        try:
+            self._start_display()
 
-            # Proxy với auth: dùng extension (hoạt động được với non-headless + Xvfb)
-            # Proxy không auth: dùng --proxy-server
+            if self._browser:
+                await self._browser.close()
+                self._browser = None
+            if self._playwright:
+                await self._playwright.stop()
+                self._playwright = None
+
+            self._playwright = await async_playwright().start()
+
+            launch_options = {
+                'headless': False,
+                'args': [
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-setuid-sandbox',
+                    '--disable-gpu',
+                    '--lang=fr-FR',
+                ],
+            }
+
             if proxy_string:
                 parsed = parse_proxy(proxy_string)
-                if parsed and parsed.get('username'):
-                    ext_dir = _create_proxy_auth_extension(
-                        parsed['host'], parsed['port'],
-                        parsed['username'], parsed['password']
-                    )
-                    if ext_dir:
-                        self._ext_dir = ext_dir
-                        options.add_argument(f'--load-extension={ext_dir}')
-                        options.add_argument(f"--proxy-server=http://{parsed['host']}:{parsed['port']}")
-                        self.add_log(f"🌐 Proxy (auth ext): {mask_proxy_password(proxy_string)}")
-                    else:
-                        options.add_argument(f"--proxy-server=http://{parsed['host']}:{parsed['port']}")
-                        self.add_log(f"🌐 Proxy (no-auth fallback): {mask_proxy_password(proxy_string)}")
-                else:
-                    options.add_argument(f"--proxy-server=http://{parsed['host']}:{parsed['port']}")
+                if parsed:
+                    proxy_config = {'server': f"http://{parsed['host']}:{parsed['port']}"}
+                    if parsed.get('username'):
+                        proxy_config['username'] = parsed['username']
+                        proxy_config['password'] = parsed['password']
+                    launch_options['proxy'] = proxy_config
                     self.add_log(f"🌐 Proxy: {mask_proxy_password(proxy_string)}")
             else:
                 self.add_log("🌐 Direct connection (không proxy)")
 
-            chrome_ver = _get_chrome_major_version()
-            self.add_log(f"🔢 Chrome version: {chrome_ver}")
-            # headless=False + Xvfb virtual display — Cloudflare Turnstile passes
-            self.driver = uc.Chrome(options=options, headless=False, use_subprocess=False,
-                                    version_main=chrome_ver)
-            self.add_log("✅ UC Browser khởi động thành công")
+            self._browser = await self._playwright.chromium.launch(
+                executable_path=self.chromium_path,
+                **launch_options,
+            )
+            self.add_log("✅ Browser khởi động thành công")
+            await self._check_proxy_country()
             return True
 
         except Exception as e:
-            self.add_log(f"❌ Lỗi khởi động UC: {type(e).__name__}: {e}")
+            self.add_log(f"❌ Lỗi khởi động: {type(e).__name__}: {e}")
             return False
 
-    def _navigate_and_get_html(self, url: str) -> tuple:
-        """Navigate đến url, chờ CF + JS render, trả về (html, cf_blocked, empty_page)."""
-        self.driver.get(url)
-        time.sleep(random.uniform(3, 5))
+    async def _human_move_and_click(self, page, tx: float, ty: float):
+        """Di chuyển chuột ngẫu nhiên rồi tiến dần tới (tx, ty) — không click."""
+        vp = page.viewport_size or {'width': 1280, 'height': 720}
+        w, h = vp['width'], vp['height']
 
-        # Chờ Cloudflare Turnstile tự pass — tối đa 90s
-        # CF managed challenge thường cần 5-60s với real browser
-        for wait_i in range(18):
-            title = self.driver.title.lower()
-            if "just a moment" not in title and "un instant" not in title:
-                self.add_log(f"✅ CF pass sau {(wait_i) * 5}s")
-                break
-            # Simulate human behavior: scroll nhẹ mỗi 10s
-            if wait_i > 0 and wait_i % 2 == 0:
-                try:
-                    self.driver.execute_script(
-                        "window.scrollBy(0, " + str(random.randint(50, 150)) + ");"
-                    )
-                except Exception:
-                    pass
-            self.add_log(f"⏳ CF challenge... ({(wait_i + 1) * 5}s)")
-            time.sleep(5)
+        # Bước 1: di chuột loạn vài điểm ngẫu nhiên
+        for _ in range(random.randint(3, 6)):
+            x = random.randint(w // 5, w * 4 // 5)
+            y = random.randint(h // 5, h * 4 // 5)
+            await page.mouse.move(x, y, steps=random.randint(10, 25))
+            await page.wait_for_timeout(random.uniform(100, 350))
 
-        # Chờ JS/React render — page phải > 5000 bytes (tối đa 20s)
-        try:
-            WebDriverWait(self.driver, 20).until(lambda d: len(d.page_source) > 5000)
-        except Exception:
-            pass
+        # Bước 2: di chuyển dần tới mục tiêu (chia làm nhiều bước nhỏ)
+        steps = random.randint(15, 30)
+        cur_x, cur_y = random.randint(w // 4, w * 3 // 4), random.randint(h // 4, h * 3 // 4)
+        for i in range(1, steps + 1):
+            nx = cur_x + (tx - cur_x) * i / steps + random.uniform(-3, 3)
+            ny = cur_y + (ty - cur_y) * i / steps + random.uniform(-3, 3)
+            await page.mouse.move(nx, ny)
+            await page.wait_for_timeout(random.uniform(20, 60))
 
-        html = self.driver.page_source
-        title_lower = self.driver.title.lower()
-        cf_blocked = (
-            "just a moment" in title_lower or
-            "un instant" in title_lower or
-            "verify you are human" in html.lower()
+        # Dừng lại tự nhiên trước khi click
+        await page.wait_for_timeout(random.uniform(200, 500))
+
+    async def _try_click_turnstile(self, page) -> bool:
+        """Di chuột tự nhiên rồi click Cloudflare Turnstile."""
+        cf_frame = next(
+            (f for f in page.frames if 'challenges.cloudflare.com' in f.url),
+            None
         )
-        empty_page = len(html) < 1000
-        self.add_log(f"📄 {len(html):,} bytes | title: {self.driver.title[:60]}")
-        return html, cf_blocked, empty_page
+        if not cf_frame:
+            return False
 
-    def _fetch_sync(self, url: str, max_retries: int = 3) -> HtmlFetchResult:
-        """Sync fetch — mỗi attempt dùng proxy khác, attempt cuối fallback direct."""
-        result = HtmlFetchResult(url, self.worker_id)
+        try:
+            vp = page.viewport_size or {'width': 1280, 'height': 720}
+            w, h = vp['width'], vp['height']
 
-        # 1 proxy attempt (nếu có) + (max_retries-1) direct attempts
-        # Proxy datacenter hay bị block ngay → skip nhanh, dành thời gian cho direct
-        proxy_to_try = random.choice(self.proxies) if self.proxies else None
-        direct_attempts = max_retries - 1 if proxy_to_try else max_retries
-        attempts = ([proxy_to_try] if proxy_to_try else []) + [None] * direct_attempts
+            # Di chuột loạn rồi tiến về vùng giữa trang (gần checkbox)
+            await self._human_move_and_click(page, w / 2, h / 2)
 
-        for attempt_idx, proxy in enumerate(attempts):
+            # Click trong frame context — cách đã tick được
+            await cf_frame.click('body', timeout=2000)
+            self.add_log("🖱️ Clicked Turnstile")
+            return True
+        except Exception as e:
+            self.add_log(f"  ℹ️ Turnstile click thất bại: {e}")
+            return False
+
+    _REFERERS = [
+        'https://www.google.fr/',
+        'https://www.google.com/',
+        'https://www.bing.com/',
+        'https://www.bing.com/search?q=manomano+france',
+        'https://www.qwant.com/',
+        'https://www.qwant.com/?q=manomano&t=web',
+        'https://duckduckgo.com/',
+        'https://duckduckgo.com/?q=manomano+fr',
+        'https://fr.yahoo.com/',
+        'https://search.yahoo.com/search?p=manomano',
+        'https://www.ecosia.org/',
+        'https://www.startpage.com/',
+    ]
+
+    async def _navigate_via_google(self, page, target_url: str, used_referers: set):
+        """Navigate tới Manomano với referer chưa dùng trong vòng loop hiện tại."""
+        available = [r for r in self._REFERERS if r not in used_referers]
+        if not available:
+            available = self._REFERERS  # reset nếu đã dùng hết
+        referer = random.choice(available)
+        used_referers.add(referer)
+        self.add_log(f"🌐 Navigate với referer: {referer}")
+        await page.goto(target_url, wait_until='domcontentloaded', timeout=30000,
+                        referer=referer)
+
+    async def _navigate_and_get_html(self, url: str, used_referers: set) -> tuple:
+        wsize = random.choice([(1920, 1080), (1366, 768), (1440, 900)])
+        context = await self._browser.new_context(
+            viewport={'width': wsize[0], 'height': wsize[1]},
+            locale='fr-FR',
+            user_agent=(
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            ),
+        )
+        page = await context.new_page()
+
+        # Che automation flags trước khi load bất kỳ trang nào
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'plugins', {get: () => [
+                {name: 'Chrome PDF Plugin'}, {name: 'Chrome PDF Viewer'}, {name: 'Native Client'}
+            ]});
+            Object.defineProperty(navigator, 'languages', {get: () => ['fr-FR', 'fr', 'en-US', 'en']});
+            window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (params) =>
+                params.name === 'notifications'
+                    ? Promise.resolve({state: Notification.permission})
+                    : originalQuery(params);
+        """)
+
+        response_headers = {}
+
+        async def on_response(response):
+            if 'manomano' in response.url and response.status == 200:
+                response_headers.update(dict(response.headers))
+
+        page.on('response', on_response)
+
+        def _is_cf_blocked(title_lower: str, html: str) -> bool:
+            return (
+                'just a moment' in title_lower or
+                'un instant' in title_lower or
+                'verify you are human' in html.lower()
+            )
+
+        try:
+            await self._navigate_via_google(page, url, used_referers)
+            await page.wait_for_timeout(random.uniform(2000, 4000))
+
+            title = (await page.title()).lower()
+            html  = await page.content()
+
+            if _is_cf_blocked(title, html):
+                self.add_log("⏳ CF detected → thử tick Turnstile...")
+                await self._try_click_turnstile(page)
+                await page.wait_for_timeout(6000)
+
+                title = (await page.title()).lower()
+                html  = await page.content()
+
+                if _is_cf_blocked(title, html):
+                    self.add_log("⚠️ Vẫn bị CF sau khi tick → thử referer mới")
+                    return html, 'blocked', False, {}, {}
+
+            # CF đã pass — chờ JS render
+            self.add_log(f"✅ CF pass")
+            try:
+                await page.wait_for_function(
+                    'document.body && document.body.innerHTML.length > 5000',
+                    timeout=20000,
+                )
+            except Exception:
+                pass
+
+            html = await page.content()
+            title = await page.title()
+            cookies_list = await context.cookies()
+            cookies = {c['name']: c['value'] for c in cookies_list}
+
+            empty_page = len(html) < 1000
+            self.add_log(f"📄 {len(html):,} bytes | {len(response_headers)} headers | title: {title[:60]}")
+            return html, 'ok', empty_page, cookies, response_headers
+
+        finally:
+            await context.close()
+
+    async def fetch_url(self, url: str, max_retries: int = 3) -> HtmlFetchResult:
+        result = HtmlFetchResult(url)
+
+        for attempt_idx in range(max_retries):
+            proxy = random.choice(self.proxies) if self.proxies else None
             label = mask_proxy_password(proxy) if proxy else "direct (không proxy)"
-            self.add_log(f"━ Lần {attempt_idx + 1}/{len(attempts)}: {label}")
+            self.add_log(f"━ Lần {attempt_idx + 1}/{max_retries}: {label}")
 
-            # Đóng driver cũ nếu có
-            if self.driver:
-                try: self.driver.quit()
-                except Exception: pass
-                self.driver = None
-            self._cleanup_ext_dir()
-
-            self.current_proxy = proxy
-            ok = self._start_driver_sync(proxy)
+            ok = await self._start_browser(proxy)
             if not ok:
-                if proxy:
-                    self.add_log("⚠️ Proxy driver fail → bỏ qua, thử direct")
+                self.add_log("⚠️ Khởi động thất bại → thử proxy khác")
                 continue
 
             try:
                 start = time.time()
-                html, cf_blocked, empty_page = self._navigate_and_get_html(url)
+                used_referers: set = set()
+                html, status, empty_page, cookies, headers = await self._navigate_and_get_html(url, used_referers)
 
-                if cf_blocked:
-                    self.add_log("⚠️ CF challenge không pass (90s) — thử lại direct")
+                if status == 'blocked':
+                    # Thử lại: browser mới + proxy hiện tại + referer mới (chưa dùng)
+                    self.add_log("🔄 CF block → browser mới + proxy hiện tại + referer mới...")
+                    ok2 = await self._start_browser(proxy)
+                    if ok2:
+                        html, status, empty_page, cookies, headers = await self._navigate_and_get_html(url, used_referers)
+                    if status == 'blocked':
+                        self.add_log("⚠️ Vẫn bị block → đổi proxy mới")
+                        continue
+
+                if status != 'ok' or empty_page:
+                    self.add_log("⚠️ Trang trống (bị block) → đổi proxy")
                     continue
 
-                if empty_page:
-                    if proxy:
-                        self.add_log("⚠️ Proxy IP datacenter bị block → chuyển sang direct")
-                    else:
-                        self.add_log("⚠️ Direct connection cũng trống — IP bị block hoặc lỗi mạng")
-                    continue
-
-                # Thành công
-                cookies = {c['name']: c['value'] for c in self.driver.get_cookies()}
                 elapsed_ms = (time.time() - start) * 1000
                 result.proxy_used = mask_proxy_password(proxy) if proxy else 'direct'
-                result.mark_success(html, {}, 200, cookies, elapsed_ms)
+                result.mark_success(html, headers, 200, cookies, elapsed_ms)
                 self.add_log(f"✅ {len(html):,} bytes | {elapsed_ms:.0f}ms")
                 return result
 
@@ -250,21 +306,21 @@ class ManomanoFetcher:
                 self.add_log(f"❌ {type(e).__name__}: {str(e)[:100]}")
 
         result.proxy_used = 'all_failed'
-        result.mark_failed("Thất bại: cần residential proxy (BuyProxies datacenter bị manomano block, IP local bị CF block)")
+        result.mark_failed("Thất bại: proxy bị block hoặc IP bị CF block")
         return result
 
-    async def fetch_url(self, url: str, max_retries: int = 3) -> HtmlFetchResult:
-        """Async wrapper — chạy sync UC trong thread pool"""
-        return await asyncio.to_thread(self._fetch_sync, url, max_retries)
-
     async def close_browser(self):
-        def _quit():
-            if self.driver:
-                try:
-                    self.driver.quit()
-                except Exception:
-                    pass
-            self._cleanup_ext_dir()
-        await asyncio.to_thread(_quit)
-        self.driver = None
+        if self._browser:
+            try:
+                await self._browser.close()
+            except Exception:
+                pass
+            self._browser = None
+        if self._playwright:
+            try:
+                await self._playwright.stop()
+            except Exception:
+                pass
+            self._playwright = None
+        self._stop_display()
         self.add_log("🔒 Browser đã đóng")

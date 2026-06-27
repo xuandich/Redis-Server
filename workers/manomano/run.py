@@ -40,7 +40,7 @@ async def main():
 
     try:
         request = {'url': url, 'ret_key': ret_key, 'proxy_type': proxy_type}
-        result = await process_single_request(request, asyncio.Semaphore(1))
+        result = await process_single_request(request)
     except Exception as e:
         result = {
             'url': url, 'ret_key': ret_key, 'status': 'failed',

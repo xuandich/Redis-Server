@@ -3,9 +3,8 @@ from typing import Dict
 
 class HtmlFetchResult:
     """Kết quả fetch HTML cho một URL"""
-    def __init__(self, url: str, worker_id: int):
+    def __init__(self, url: str):
         self.url = url
-        self.worker_id = worker_id
         self.html = ""
         self.headers = {}
         self.http_code = 0

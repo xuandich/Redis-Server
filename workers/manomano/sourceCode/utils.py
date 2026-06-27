@@ -13,28 +13,6 @@ def mask_proxy_password(proxy: str) -> str:
     return proxy
 
 
-def get_proxy_host(proxy_string: str) -> str:
-    """Trích xuất host:port từ proxy string để hiển thị"""
-    try:
-        if '@' in proxy_string:
-            server_part = proxy_string.split('@')[1]
-        else:
-            server_part = proxy_string
-        if ':' in server_part:
-            return server_part.split(':')[0]
-        return server_part
-    except:
-        return proxy_string[:20]
-
-
-def get_country_flag(country_code: str) -> str:
-    """Chuyển mã quốc gia 2 ký tự thành emoji flag"""
-    if not country_code or len(country_code) != 2:
-        return ""
-    code = country_code.upper()
-    return chr(0x1F1E6 + ord(code[0]) - ord('A')) + chr(0x1F1E6 + ord(code[1]) - ord('A'))
-
-
 def parse_proxy(proxy_string: str) -> Optional[Dict]:
     """Parse proxy string thành dict với server, username, password"""
     proxy_string = str(proxy_string).strip()
