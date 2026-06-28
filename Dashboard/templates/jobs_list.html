@@ -144,7 +144,7 @@
 
                 return `
                     <a href="/job/${job.ret_key}" class="job-card ${state}">
-                        <div class="job-id">#${retKeyShort}</div>
+                        <div class="job-id">#${job.ret_key}</div>
                         <div class="job-url">${job.url || 'N/A'}</div>
                         <div class="job-meta">${meta}</div>
                         ${errorHtml}

@@ -127,7 +127,7 @@ while time.time() - poll_start < timeout:
                 job['completed_at'] = time.time()
 
                 http_code = job_result.get('http_code', 0)
-                html_size = len(job_result.get('html', ''))
+                html_size = len(job_result.get('html') or '')
                 elapsed = job_result.get('total_elapsed_seconds', 0)
 
                 if status == 'success':

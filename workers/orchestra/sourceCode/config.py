@@ -6,17 +6,13 @@ import pandas as pd
 PROXY_DIR = os.environ.get('PROXY_DIR', '/app/Proxy')
 
 
-def ensure_directories():
-    os.makedirs(PROXY_DIR, exist_ok=True)
-
-
 def load_proxies_from_excel() -> List[str]:
+    """Đọc proxy từ file Excel"""
     force_proxy = os.environ.get('FORCE_PROXY')
     if force_proxy:
         print(f"⚡ FORCE_PROXY: {force_proxy}")
         return [force_proxy]
 
-    """Đọc proxy từ file Excel"""
     try:
         excel_path = os.path.join(PROXY_DIR, "buyproxies_List.xlsx")
         print(f"\n📖 Đang đọc proxy từ file: {excel_path}")
@@ -29,12 +25,12 @@ def load_proxies_from_excel() -> List[str]:
         proxies = []
 
         if df.shape[1] >= 2:
-            for idx, row in df.iterrows():
+            for _, row in df.iterrows():
                 proxy = row[1]
                 if pd.notna(proxy) and str(proxy).strip():
                     proxies.append(str(proxy).strip())
         else:
-            for idx, row in df.iterrows():
+            for _, row in df.iterrows():
                 proxy = row[0]
                 if pd.notna(proxy) and str(proxy).strip():
                     proxies.append(str(proxy).strip())

@@ -1,8 +1,9 @@
 # BUG-70: orchestra đánh dấu success dù title/price trích xuất rỗng — zero-data crawl báo finished
 
 **Severity**: MEDIUM
-**Status**: OPEN
+**Status**: FIXED
 **Date**: 2026-06-26
+**Fixed**: 2026-06-28
 
 ## Problem
 
@@ -30,7 +31,7 @@ Trang không phải sản phẩm (soft-404, redirect category, DOM đổi nhẹ)
 
 ## Fix
 
-Trước `mark_success` ([extractor.py:273](../workers/orchestra/sourceCode/extractor.py#L273)): nếu `not title` (hoặc cả title lẫn price rỗng) trên trang được kỳ vọng là sản phẩm → `mark_failed('No product data extracted')` để retry, hoặc đánh dấu `status='partial'` rõ ràng. Cân nhắc kiểm `driver.current_url`/marker trang sản phẩm.
+Xóa hẳn `_extract_product_info()` (title/price extraction) — orchestra chuyển thành HTML-only fetcher giống manomano. Thay bằng `_validate_product_page()`: kiểm domain (URL phải chứa `shop-orchestra.com` hoặc `orchestra.fr`) + CSS selector (`h1`, `.product-name`, v.v.). Nếu validate thất bại → trả `invalid_content` → retry với proxy mới, không mark success.
 
 ## Test
 

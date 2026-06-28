@@ -13,20 +13,6 @@ def mask_proxy_password(proxy: str) -> str:
     return proxy
 
 
-def get_proxy_host(proxy_string: str) -> str:
-    """Trích xuất host:port từ proxy string để hiển thị"""
-    try:
-        if '@' in proxy_string:
-            server_part = proxy_string.split('@')[1]
-        else:
-            server_part = proxy_string
-        if ':' in server_part:
-            return server_part.split(':')[0]
-        return server_part
-    except Exception:
-        return proxy_string[:20]
-
-
 def parse_proxy(proxy_string: str) -> Optional[Dict]:
     """Parse proxy string thành dict với server, username, password"""
     proxy_string = str(proxy_string).strip()

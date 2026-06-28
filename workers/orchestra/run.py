@@ -20,7 +20,6 @@ def write_error_to_redis(error_msg: str):
             'error': error_msg, 'http_code': None,
             'html': '', 'headers': {}, 'cookies': {},
             'elapsed_ms': 0, 'proxy_type': proxy_type, 'total_elapsed_seconds': 0,
-            'title': '', 'price': '',
         }
         r.setex(f"result:{ret_key}", result_ttl, json.dumps(result, ensure_ascii=False, default=str))
         print(f"[ORCHESTRA] Error written to Redis: {error_msg}")
@@ -41,20 +40,17 @@ async def main():
 
     try:
         request = {'url': url, 'ret_key': ret_key, 'proxy_type': proxy_type}
-        result = await process_single_request(request, asyncio.Semaphore(1))
+        result = await process_single_request(request)
     except Exception as e:
         result = {
             'url': url, 'ret_key': ret_key, 'status': 'failed',
             'error': f'Worker exception: {str(e)}',
             'http_code': None, 'html': '', 'headers': {}, 'cookies': {},
             'elapsed_ms': 0, 'proxy_type': proxy_type, 'total_elapsed_seconds': 0,
-            'title': '', 'price': '',
         }
         print(f"[ORCHESTRA] Exception: {e}")
 
-    print(f"[ORCHESTRA] status={result.get('status')} http={result.get('http_code')} "
-          f"title={result.get('title', '')[:40]!r} price={result.get('price', '')!r} "
-          f"error={result.get('error')} html_len={len(result.get('html') or '')}")
+    print(f"[ORCHESTRA] status={result.get('status')} http={result.get('http_code')} error={result.get('error')} html_len={len(result.get('html') or '')}")
     r.setex(f"result:{ret_key}", result_ttl, json.dumps(result, ensure_ascii=False, default=str))
     print(f"[ORCHESTRA] Done: {ret_key}")
 

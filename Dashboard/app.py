@@ -255,8 +255,7 @@ def get_jobs():
 
                     html = result.get('html') or ''
                     job_info = {
-                        'ret_key': ret_key[:8],
-                        'ret_key_full': ret_key,
+                        'ret_key': ret_key,
                         'url': result.get('url', 'N/A'),
                         'domain': result.get('domain', 'unknown'),
                         'status': result.get('status', 'unknown'),
@@ -292,8 +291,7 @@ def get_jobs():
                     state = state_data.get('state', 'unknown')
 
                     job_info = {
-                        'ret_key': ret_key[:8],
-                        'ret_key_full': ret_key,
+                        'ret_key': ret_key,
                         'url': state_data.get('url', 'N/A'),
                         'domain': state_data.get('domain', 'unknown'),
                         'status': state,
@@ -342,8 +340,7 @@ def get_jobs():
                             url_match = re.search(r"url='([^']+)'", description)
                             url = url_match.group(1) if url_match else 'N/A'
                             jobs_data['queued'].append({
-                                'ret_key': ret_key[:8],
-                                'ret_key_full': ret_key,
+                                'ret_key': ret_key,
                                 'url': url,
                                 'domain': domain,
                                 'status': 'queued',
