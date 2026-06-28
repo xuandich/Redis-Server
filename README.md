@@ -58,6 +58,52 @@ curl http://localhost:5000/api/job/<ret_key>
 ./stop.sh -clear   # wipe Redis data
 ```
 
+## How to use `ret_key`
+
+You must generate a unique `ret_key` before submitting. The server echoes it back and uses it to track the job:
+
+```bash
+# 1. Generate ret_key (UUID format)
+RET_KEY="ret_manomano_$(uuidgen)"
+# Example: ret_manomano_a1b2c3d4-5678-9abc-def0-1234567890ab
+
+# 2. Submit job with url + ret_key
+curl -X POST http://localhost:5000/api/submit-job \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"url\": \"https://www.manomano.fr/p/product-123\",
+    \"ret_key\": \"$RET_KEY\",
+    \"proxy_type\": \"standard\"
+  }"
+
+# Response (received in ~10ms):
+# {
+#   "ret_key": "ret_manomano_a1b2c3d4-5678-9abc-def0-1234567890ab",
+#   "status": "queued",
+#   "message": "Job enqueued successfully"
+# }
+
+# 3. Fetch result later (anytime while the result is in Redis, TTL=3600s)
+curl http://localhost:5000/api/job/$RET_KEY
+
+# Response (when job is done):
+# {
+#   "status": "success",
+#   "html": "<!DOCTYPE html>...",
+#   "headers": {...},
+#   "elapsed_ms": 4821,
+#   ...
+# }
+```
+
+**Key points:**
+- `ret_key` format: `ret_{domain}_{uuid}` (e.g., `ret_manomano_abc123...`)
+- **Client generates ret_key**, server echoes it back in response
+- Immediately after submit, server confirms the ret_key in response (job queued, not yet running)
+- Save ret_key to fetch results later
+- Results stay in Redis for `RESULT_TTL` seconds (default 3600s)
+- Multiple jobs can run in parallel; each identified by its unique ret_key
+
 ## Supported Domains
 
 | Domain | Browser | Cloudflare bypass | Max concurrent | Timeout |
