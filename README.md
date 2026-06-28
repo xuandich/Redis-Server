@@ -19,9 +19,11 @@
 ## How it works
 
 ```
-Client → POST /api/submit-job
+Client generates ret_key (format: ret_{domain}_{uuid})
+       ↓
+Client → POST /api/submit-job (url + ret_key)
        → Redis Queue (RQ)
-       → Orchestrator (auto-discovers workers/)
+       → Orchestrator (auto-discovers workers/, routes by URL domain)
        → Docker container per job (isolated, memory-capped)
        → result:{ret_key} written to Redis
        → Client polls GET /api/job/{ret_key}
@@ -42,14 +44,13 @@ cp .env.example .env          # edit as needed
 # 2. Start everything
 ./start.sh                    # builds missing images, starts all services
 
-# 3. Open dashboard
-open http://localhost:5000
+# 3. Open dashboard (browse to http://localhost:5000)
 
-# 4. Submit a job
+# 4. Submit a job (proxy_type optional: standard or none)
 RET_KEY="ret_manomano_$(uuidgen)"
 curl -X POST http://localhost:5000/api/submit-job \
   -H "Content-Type: application/json" \
-  -d "{\"url\": \"https://www.manomano.fr/p/product-123\", \"ret_key\": \"$RET_KEY\"}"
+  -d "{\"url\": \"https://www.manomano.fr/p/product-123\", \"ret_key\": \"$RET_KEY\", \"proxy_type\": \"standard\"}"
 
 # 5. Fetch result
 curl http://localhost:5000/api/job/$RET_KEY
@@ -61,7 +62,7 @@ curl http://localhost:5000/api/job/$RET_KEY
 
 ## How to use `ret_key`
 
-You must generate a unique `ret_key` before submitting. The server echoes it back and uses it to track the job:
+You must generate a unique `ret_key` before submitting. The server returns it in the response and uses it to track the job:
 
 ```bash
 # 1. Generate ret_key (UUID format)
@@ -99,7 +100,7 @@ curl http://localhost:5000/api/job/$RET_KEY
 
 **Key points:**
 - `ret_key` format: `ret_{domain}_{uuid}` (e.g., `ret_manomano_abc123...`)
-- **Client generates ret_key**, server echoes it back in response
+- **Client generates ret_key**, server returns it in the response
 - Immediately after submit, server confirms the ret_key in response (job queued, not yet running)
 - Save ret_key to fetch results later
 - Results stay in Redis for `RESULT_TTL` seconds (default 3600s)
@@ -113,13 +114,12 @@ curl http://localhost:5000/api/job/$RET_KEY
 | `manomano` | Playwright + Xvfb | Yes (Turnstile) | 3 | 300s |
 | `orchestra` | undetected-chrome | Yes | 3 | 180s |
 | `newark` | Playwright | Partial | 3 | 720s |
-| `amazon` | — | — | 3 | 120s |
 
 ## API
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/submit-job` | Submit a crawl job. Returns `ret_key`. |
+| `POST` | `/api/submit-job` | Submit a crawl job (requires `url` + `ret_key`). |
 | `GET` | `/api/job/<ret_key>` | Fetch result by return key. |
 | `GET` | `/api/jobs/<state>` | Paginated jobs: `queued · running · finished · failed` |
 | `GET` | `/api/stats` | Counts by state and domain, success rate. |
@@ -135,14 +135,17 @@ curl http://localhost:5000/api/job/$RET_KEY
   "status": "success",
   "http_code": 200,
   "html": "<!DOCTYPE html>...",
-  "headers": {},
-  "cookies": {},
+  "headers": {"content-type": "text/html", "...": "..."},
+  "cookies": {"session": "abc123", "...": "..."},
   "elapsed_ms": 4821,
   "total_elapsed_seconds": 5.1,
   "domain": "manomano",
-  "ret_key": "ret_manomano_f3a2b1c0-...",
+  "ret_key": "ret_manomano_f3a2b1c0-5678-9abc-def0-1234567890ab",
+  "url": "https://www.manomano.fr/p/product-123",
+  "proxy_type": "standard",
   "log": ["✅ CF pass after 5s", "📄 485,106 bytes"],
-  "error": null
+  "error": null,
+  "timestamp": 1719562843.521
 }
 ```
 
@@ -156,21 +159,30 @@ REDIS_PORT=6379
 
 RESULT_TTL=3600                  # seconds to keep results in Redis
 JOB_TIMEOUT_DEFAULT=120          # container kill timeout (seconds)
-JOB_TIMEOUT_MANOMANO=300         # per-domain override
+
+# Per-domain timeouts
+JOB_TIMEOUT_FNAC=120
+JOB_TIMEOUT_MANOMANO=300
 JOB_TIMEOUT_NEWARK=720
+JOB_TIMEOUT_ORCHESTRA=180
 
 CONTAINER_MEM_LIMIT=1g
 CONTAINER_SHM_SIZE=2g            # must be >512MB for Chromium
 
 MAX_CONCURRENT_TOTAL=10          # global cap across all domains
-MAX_CONCURRENT_FNAC=5            # per-domain cap
+
+# Per-domain concurrency caps
+MAX_CONCURRENT_FNAC=5
 MAX_CONCURRENT_MANOMANO=3
+MAX_CONCURRENT_NEWARK=3
+MAX_CONCURRENT_ORCHESTRA=3
 
 PROXY_HOST_DIR=/path/to/Proxy    # mounted read-only into containers
 ```
 
 ## Adding a new domain
 
+1. Create worker folder with `Dockerfile`:
 ```
 workers/
 └── mynewdomain/
@@ -182,24 +194,35 @@ workers/
         └── requirements.txt
 ```
 
-Restart — the orchestrator picks it up. Add `JOB_TIMEOUT_MYNEWDOMAIN` and `MAX_CONCURRENT_MYNEWDOMAIN` to `.env` if the defaults don't fit.
+2. Add configuration to `.env` (optional if defaults work):
+```ini
+JOB_TIMEOUT_MYNEWDOMAIN=120      # adjust based on complexity
+MAX_CONCURRENT_MYNEWDOMAIN=3     # adjust based on load capacity
+```
+
+3. Restart services:
+```bash
+./stop.sh && ./start.sh   # orchestrator auto-discovers new worker
+```
+
+The orchestrator scans `workers/` and automatically creates a queue `crawler:mynewdomain` and spawns workers.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Docker Compose                                          │
-│                                                          │
+│  Docker Compose                                         │
+│                                                         │
 │  ┌──────────┐    ┌─────────────┐    ┌───────────────┐   │
 │  │ Dashboard│    │Orchestrator │    │     Redis     │   │
 │  │ :5000    │───▶│ auto-disco  │───▶│  queue+state  │   │
 │  │ Flask    │    │ slot mgmt   │    │  result store │   │
 │  └──────────┘    └──────┬──────┘    └───────────────┘   │
-│                         │                                │
-│              ┌──────────▼──────────┐                     │
-│              │  Docker API         │                     │
-│              │  spawn per job      │                     │
-│              └──────────┬──────────┘                     │
+│                         │                               │
+│              ┌──────────▼──────────┐                    │
+│              │  Docker API         │                    │
+│              │  spawn per job      │                    │
+│              └──────────┬──────────┘                    │
 └─────────────────────────┼───────────────────────────────┘
                           │
           ┌───────────────┼───────────────┐
@@ -243,15 +266,27 @@ sudo snap install chromium
 
 **Worker image missing / stale**
 ```bash
+# Replace {DOMAIN} with: fnac, manomano, newark, or orchestra
+docker build --no-cache -t worker-{DOMAIN}:latest workers/{DOMAIN}/
+
+# Example: rebuild manomano worker
 docker build --no-cache -t worker-manomano:latest workers/manomano/
 ```
 
 **Redis connection refused**
 ```bash
-docker ps   # verify redis container is healthy
+# Verify redis container is running and healthy
+docker ps | grep redis-server
+
+# Test API connection
+curl -s http://localhost:5000/api/stats | jq .
 ```
 
-**Job stuck in `running`**
+**Job stuck in `running` or orphan containers**
 ```bash
+# Stop (keeps Redis data) and restart
 ./stop.sh && ./start.sh   # orchestrator kills orphan containers on restart
+
+# To also clear all Redis data
+./stop.sh -clear && ./start.sh
 ```
