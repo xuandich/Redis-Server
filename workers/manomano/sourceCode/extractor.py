@@ -181,6 +181,32 @@ class ManomanoFetcher:
         await page.goto(target_url, wait_until='domcontentloaded', timeout=30000,
                         referer=referer)
 
+    async def _validate_product_page(self, page) -> bool:
+        """Kiểm URL + nội dung để xác minh là trang sản phẩm thực."""
+        try:
+            current_url = page.url.lower()
+
+            # 1. Kiểm URL có chứa /p/ (trang sản phẩm manomano)
+            if '/p/' not in current_url:
+                self.add_log(f"⚠️ URL không chứa /p/ → redirect khỏi trang sản phẩm: {current_url[:80]}")
+                return False
+
+            # 2. Kiểm tìm thấy nội dung sản phẩm (tên/giá)
+            try:
+                await page.wait_for_selector(
+                    'h1, .product-name, [data-testid="product-title"], .m-productName',
+                    timeout=5000
+                )
+                self.add_log("✓ Tìm thấy tên sản phẩm")
+                return True
+            except Exception:
+                self.add_log("⚠️ Không tìm thấy tên/giá sản phẩm")
+                return False
+
+        except Exception as e:
+            self.add_log(f"⚠️ Lỗi validate: {e}")
+            return False
+
     async def _navigate_and_get_html(self, url: str, used_referers: set) -> tuple:
         wsize = random.choice([(1920, 1080), (1366, 768), (1440, 900)])
         context = await self._browser.new_context(
@@ -249,6 +275,10 @@ class ManomanoFetcher:
                     'document.body && document.body.innerHTML.length > 5000',
                     timeout=20000,
                 )
+            except TimeoutError:
+                self.add_log("⚠️ Timeout render → trang không đủ nội dung")
+                html = await page.content()
+                return html, 'render_timeout', False, {}, {}
             except Exception:
                 pass
 
@@ -259,7 +289,10 @@ class ManomanoFetcher:
 
             empty_page = len(html) < 1000
             self.add_log(f"📄 {len(html):,} bytes | {len(response_headers)} headers | title: {title[:60]}")
-            return html, 'ok', empty_page, cookies, response_headers
+
+            # Validation: kiểm URL + nội dung trước khi return
+            is_valid = await self._validate_product_page(page)
+            return html, 'ok' if is_valid else 'invalid_content', empty_page, cookies, response_headers
 
         finally:
             await context.close()
@@ -291,6 +324,14 @@ class ManomanoFetcher:
                     if status == 'blocked':
                         self.add_log("⚠️ Vẫn bị block → đổi proxy mới")
                         continue
+
+                if status == 'render_timeout':
+                    self.add_log("⚠️ Render timeout → đổi proxy")
+                    continue
+
+                if status == 'invalid_content':
+                    self.add_log("⚠️ Không phải trang sản phẩm (redirect/404) → đổi proxy")
+                    continue
 
                 if status != 'ok' or empty_page:
                     self.add_log("⚠️ Trang trống (bị block) → đổi proxy")

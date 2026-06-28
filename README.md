@@ -46,12 +46,13 @@ cp .env.example .env          # edit as needed
 open http://localhost:5000
 
 # 4. Submit a job
+RET_KEY="ret_manomano_$(uuidgen)"
 curl -X POST http://localhost:5000/api/submit-job \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://www.manomano.fr/p/product-123", "domain": "manomano"}'
+  -d "{\"url\": \"https://www.manomano.fr/p/product-123\", \"ret_key\": \"$RET_KEY\"}"
 
 # 5. Fetch result
-curl http://localhost:5000/api/job/<ret_key>
+curl http://localhost:5000/api/job/$RET_KEY
 
 # Stop
 ./stop.sh          # keep Redis data
