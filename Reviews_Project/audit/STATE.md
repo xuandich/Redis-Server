@@ -15,35 +15,34 @@
 
 ---
 
-## Chu trình hiện tại — RE-AUDIT TOÀN DIỆN (logic mới chunked)
+## Chu trình hiện tại — RE-AUDIT 2026-06-29 (coordinator budget-aware)
 
-- **Bắt đầu**: 2026-06-27 (chiều)
-- **Commit nền**: `16438da`
-- **Phạm vi**: re-audit chuẩn pha 1→5 từ đầu, dùng guard cỡ-mẻ mới. Pha 6 skip (workers/ không đổi từ 06-27).
-- **Trạng thái tổng**: ✅ **HOÀN TẤT** → review [`2026-06-27b_flow-audit.md`](../2026-06-27b_flow-audit.md), bug mới **BUG-77 → BUG-80**
+- **Bắt đầu**: 2026-06-29
+- **Commit nền**: `ef7e652` (diff từ `16438da`: manomano+orchestra viết lại Playwright ~1000 dòng; app.py/orchestrator.py/main.py đổi)
+- **Phạm vi**: P1 verify 6 fix (69,70,74,81,23,48) · P6 worker-correctness (manomano,orchestra — workers ĐỔI nhiều) · P4 5 dim · P5 verify
+- **Engine**: `phase0-coordinator.workflow.js` (budget-aware, dừng cứng 95%, mode find/verify). Token học qua `results/token-ledger.json`.
+- **Trạng thái tổng**: 🟡 **ĐANG DỞ** — find ✅ xong; **verify HOÃN do quota Team còn 7%** (chờ quota hồi rồi chạy tiếp)
 
-### Tiến độ từng pha
+### Tiến độ
+| Pha | Trạng thái | runId | Kết quả |
+|---|---|---|---|
+| find (P1+P6+P4) mode=find | ✅ done | `wf_51f1e49a` | spent **253k (84%/300k)**, không chạm trần. P1: 5/6 fix OK; **BUG-81 fix MISSING**. P6: 8 static+3 runtime. P4: 12 finding. → **20 finding** chờ verify |
+| P5 verify (20 finding) mode=verify | ⬜ HOÃN (quota 7%) | — | input SẴN SÀNG: `results/verify-input.json` (gọn 20) / nguồn `findings-pending.json`. **Resume**: `Workflow(phase0-coordinator, {mode:"verify", totalBudget:300000, findings:<nội dung verify-input.json>})` |
 
-| Pha | Trạng thái | runId | Kết quả | Deferred còn lại |
-|---|---|---|---|---|
-| P1 verify-fixes (BUG-13,60,61,20,24,49) | ✅ done | `wf_9ffe76c2` | 6/6 fix ĐÚNG, 0 regression (vài nit) | — |
-| P2 reconcile (dashboard/slot/worker — 23 bug) | ✅ done | `wf_b97111c6` | 21 open, 1 partial (BUG-23), 1 fixed | còn ~17 bug LOW chưa nhóm |
-| P3 flow-accuracy (3 area) | ✅ done | `wf_89310e2f` | flow đúng; chỉ BUG-60 nay FIXED + line-shift +12 app.py | — |
-| P4 find (8 dim, 3 batch) | ✅ done | `wf_4d8e516c`+`wf_9e5c8470`+`wf_c760332e` | 33 finding → 8 new-candidate + 3 borderline; 24 trùng bug cũ | — |
-| P5 verify (11 finding, 2 mẻ) | ✅ done | `wf_3906275c`(A=6) + `wf_70dd23f8`(B=5) | **4 confirmed-new** (BUG-77..80) / 7 refuted-hoặc-trùng | — |
-| P6 worker-correctness | ⏭️ skip | — | workers/ không đổi từ 06-27 (đã audit) | — |
+### 📌 Học token (calibration)
+- **find một mình = 253k** output token → cycleBudget 300k QUÁ NHỎ cho cả find+verify. Full cycle ước **~530k**.
+- Ledger ghi turn find (more_work=true). Quota Team còn **70%** (user cấp) → đủ chạy tiếp.
 
 ### Hàng đợi (state máy)
-
-- `results/findings-pending.json`: sẽ ghi sau khi P4 xong
-- `results/verdicts.json`: của chu trình 06-27 (sẽ backup trước khi P5 chạy)
+- `results/findings-pending.json`: **20 finding** (đã ghi từ find).
+- `results/verify-input.json`: bản gọn 20 finding để feed P5.
+- `results/verdicts.json`: chu trình 06-27b đã backup `verdicts_2026-06-27b.json`.
 
 ### ⏭️ Việc tiếp theo
-
-- [ ] **Rename `Bugs/BUG-60*` → `(FIXED)`** (P1+P3 xác nhận đã fix; file chưa rename).
-- [ ] Fix ưu tiên: **BUG-77** (pubsub leak) → còn tồn từ 06-27: **BUG-74** (timeout HIGH), **BUG-69** (manomano false-success HIGH).
-- [ ] *(tùy chọn)* Reconcile nốt ~17 bug LOW chưa nhóm ở P2 (36-47, 62-64...).
-- [ ] *(tùy chọn)* Runtime-check 7 selector-fragility của 06-27a.
+- [ ] Hoàn tất `mode=verify` 20 finding (coordinator tự chunk; nếu defer → chạy nốt nextArgs).
+- [ ] **BUG-81**: P1 báo fix MISSING/INCORRECT — kiểm `app.py _extract_domain_from_url`; **KHÔNG** rename `(FIXED)` cho tới khi sửa thật.
+- [ ] Sau verify: finding `is_real&&is_new` → tạo `Bugs/BUG-82+`; tổng hợp review `2026-06-29_flow-audit.md`; cập nhật `00-context §5` (ID cao nhất hiện = BUG-81).
+- [ ] *(tồn từ trước)* BUG-77 pubsub leak.
 
 ---
 
