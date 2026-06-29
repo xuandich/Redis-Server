@@ -48,11 +48,11 @@ Hệ Redis + RQ (Redis Queue) crawler phân tán, chạy bằng Docker Compose. 
 ## 5. Quy ước
 
 - **Severity**: critical / high / medium / low / nit. Verdict thêm: refuted.
-- **Bug mới**: ID kế tiếp = (max trong `ls Bugs/`) + 1. Hiện cao nhất **BUG-80** → mới bắt đầu từ **BUG-81**.
+- **Bug mới**: ID kế tiếp = (max trong `ls Bugs/`) + 1. Hiện cao nhất **BUG-98** → mới bắt đầu từ **BUG-99**.
 - **Đánh dấu fixed**: đổi tên file `BUG-XX_...md` → `BUG-XX(FIXED)_...md` (git mv) + sửa field `**Status**: FIXED (ngày)` + thêm mục `## Fix Applied`.
 - **Result schema** (worker ghi): `{url, html, headers, http_code, cookies, elapsed_ms, error, status}` + (fnac) `ret_key, total_elapsed_seconds, mode, proxy_type, log`. Top-level `domain`/`timestamp` do orchestrator backfill (BUG-24).
 - **Dedup finding mới**: so với `ls Bugs/` — nếu trùng claim/file/cơ chế của BUG-XX đã có thì `is_new=false`.
 
 ## 6. Bảo trì file này
 
-Sau mỗi đợt fix: (a) thêm dòng vào §4, (b) cập nhật "ID cao nhất" ở §5, (c) nếu cơ chế cốt lõi đổi thì sửa §3. Lịch sử review: `Reviews_Project/2026-06-19`, `2026-06-23`, `2026-06-26`, `2026-06-27` (audit 2 worker mới manomano/orchestra → BUG-69..76).
+Sau mỗi đợt fix: (a) thêm dòng vào §4, (b) cập nhật "ID cao nhất" ở §5, (c) nếu cơ chế cốt lõi đổi thì sửa §3. Lịch sử review: `Reviews_Project/2026-06-19`, `2026-06-23`, `2026-06-26`, `2026-06-27` (audit 2 worker mới manomano/orchestra → BUG-69..76), `2026-06-29` (re-audit P1+P6+P4+P5 coordinator budget-aware → BUG-82..98, 17 confirmed-new).

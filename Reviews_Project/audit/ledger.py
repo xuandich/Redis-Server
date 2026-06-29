@@ -61,12 +61,14 @@ def cmd_append(a, data):
         "pct_total": round(a.spent / a.total * 100) if a.total else None,
         "est_per_agent": a.est, "agents": a.agents,
         "phases": [s for s in a.phases.split(",") if s],
-        "stopped_by_budget": a.stopped, "more_work": a.more, "note": a.note,
+        "stopped_by_budget": a.stopped, "more_work": a.more,
+        "quota_pct_delta": a.quota_delta, "note": a.note,
     }
     data.setdefault("runs", []).append(rec)
-    cyc = data.setdefault("currentCycle", {"id": a.date, "budget": None, "spent": 0, "turns": 0})
+    cyc = data.setdefault("currentCycle", {"id": a.date, "budget": None, "spent": 0, "turns": 0, "quota_pct": 0})
     cyc["spent"] = cyc.get("spent", 0) + a.spent
     cyc["turns"] = cyc.get("turns", 0) + 1
+    cyc["quota_pct"] = round(cyc.get("quota_pct", 0) + (a.quota_delta or 0), 1)
     data["updated"] = a.date
     recompute_recommend(data)
     save(data)
@@ -85,7 +87,9 @@ def cmd_status(a, data):
     print(f"Chi phí 1 chu trình đầy (maxFullRunSpent): {F(mx) if mx else 'chưa có dữ liệu (lần đầu)'}")
     print(f"--- Chu trình hiện tại: {cyc.get('id') or '(chưa mở)'} ---")
     print(f"  cycleBudget: {F(cyc['budget']) if cyc.get('budget') else '(chưa set)'}")
-    print(f"  đã dùng (cộng dồn): {F(cyc.get('spent', 0))} · {cyc.get('turns', 0)} turn")
+    print(f"  đã dùng (cộng dồn): {F(cyc.get('spent', 0))} output token · {cyc.get('turns', 0)} turn")
+    if cyc.get("quota_pct"):
+        print(f"  quota /usage tiêu (cộng dồn): {cyc['quota_pct']}%  ← GROUND TRUTH (theo cái này, không theo output)")
     if cyc.get("budget"):
         used = cyc.get("spent", 0)
         pct = round(used / cyc["budget"] * 100) if cyc["budget"] else 0
@@ -126,6 +130,7 @@ def main():
     ap.add_argument("--phases", default="")
     ap.add_argument("--stopped", action="store_true")
     ap.add_argument("--more", action="store_true")
+    ap.add_argument("--quota-delta", type=float, default=None, help="%% quota /usage tiêu turn này (GROUND TRUTH — quan trọng hơn spent)")
     ap.add_argument("--note", default="")
 
     st = sub.add_parser("status", help="in trạng thái + khuyến nghị")

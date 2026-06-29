@@ -21,7 +21,7 @@
 - **Commit nền**: `ef7e652` (diff từ `16438da`: manomano+orchestra viết lại Playwright ~1000 dòng; app.py/orchestrator.py/main.py đổi)
 - **Phạm vi**: P1 verify 6 fix (69,70,74,81,23,48) · P6 worker-correctness (manomano,orchestra — workers ĐỔI nhiều) · P4 5 dim · P5 verify
 - **Engine**: `phase0-coordinator.workflow.js` (budget-aware, dừng cứng 95%, mode find/verify). Token học qua `results/token-ledger.json`.
-- **Trạng thái tổng**: 🟡 **ĐANG DỞ** — find ✅ xong; **verify HOÃN do quota Team còn 7%** (chờ quota hồi rồi chạy tiếp)
+- **Trạng thái tổng**: ✅ **HOÀN TẤT P1+P6+P4+P5** — tất cả audit logic xong; **17 bug mới (BUG-82..98) chờ tạo file**
 
 ### Tiến độ
 | Pha | Trạng thái | runId | Kết quả |
