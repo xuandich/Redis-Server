@@ -7,7 +7,7 @@ PROXY_DIR = os.environ.get('PROXY_DIR', '/app/Proxy')
 INPUT_FILE = os.environ.get('INPUT_FILE', 'input/amazon_url.xlsx')
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'output')
 
-MAX_RETRIES = int(os.environ.get('MAX_RETRIES', '3'))
+MAX_RETRIES = int(os.environ.get('MAX_RETRIES', '5'))
 MAX_URLS: Optional[int] = int(os.environ.get('MAX_URLS', '0')) or None
 
 

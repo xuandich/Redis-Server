@@ -86,15 +86,16 @@ class AmazonFetcher:
                 **launch_options,
             )
             self.add_log("✅ Browser khởi động thành công")
-            await self._check_proxy_country()
+            if not await self._check_proxy_country():
+                return False
             return True
 
         except Exception as e:
             self.add_log(f"❌ Lỗi khởi động: {type(e).__name__}: {e}")
             return False
 
-    async def _check_proxy_country(self):
-        """Kiểm tra IP thực tế và country qua proxy đang dùng."""
+    async def _check_proxy_country(self) -> bool:
+        """Kiểm tra IP thực tế và country qua proxy đang dùng. Trả False nếu thất bại."""
         try:
             context = await self._browser.new_context()
             page = await context.new_page()
@@ -105,8 +106,10 @@ class AmazonFetcher:
             country = data.get('country', '?')
             flag = _country_flag(data.get('country_code', ''))
             self.add_log(f"🌍 IP: {ip} | {country} {flag}")
+            return True
         except Exception as e:
-            self.add_log(f"🌍 IP check thất bại: {e}")
+            self.add_log(f"🌍 IP check thất bại → đổi proxy: {e}")
+            return False
 
     async def _inject_cookies(self, context, domain: str):
         if not self.cookie_string:
@@ -137,8 +140,8 @@ class AmazonFetcher:
 
             zip_input = page.locator("#GLUXZipUpdateInput")
             if await zip_input.count() == 0:
-                self.add_log("⚠️ Không tìm thấy ô nhập postal code")
-                return False
+                self.add_log("⚠️ Không tìm thấy ô nhập postal code → sẽ retry")
+                return None
 
             await zip_input.fill(AMAZON_POSTAL_CODE)
             await page.wait_for_timeout(1000)
@@ -223,6 +226,15 @@ class AmazonFetcher:
         )
         page = await context.new_page()
 
+        # Chặn image và media để load nhanh hơn
+        async def _block_media(route):
+            if route.request.resource_type in ('image', 'media'):
+                await route.abort()
+            else:
+                await route.continue_()
+
+        await page.route('**/*', _block_media)
+
         response_headers: dict = {}
 
         async def on_response(response):
@@ -253,10 +265,21 @@ class AmazonFetcher:
             try:
                 await page.reload(wait_until='domcontentloaded', timeout=30000)
             except Exception as e:
-                self.add_log(f"⚠️ Reload thất bại (bỏ qua): {e}")
+                self.add_log(f"⚠️ Reload thất bại → stop + thử lại 1 lần: {e}")
+                try:
+                    await page.stop()
+                except Exception:
+                    pass
+                try:
+                    await page.reload(wait_until='domcontentloaded', timeout=30000)
+                    self.add_log("✅ Reload lần 2 thành công")
+                except Exception as e2:
+                    self.add_log(f"⚠️ Reload lần 2 vẫn thất bại (bỏ qua): {e2}")
             await page.wait_for_timeout(random.uniform(2000, 3000))
 
-            await self._change_delivery_address(page)
+            addr_ok = await self._change_delivery_address(page)
+            if addr_ok is None:
+                return False, '', {}, {}, 'no_postal'
 
             # Truy cập trang sản phẩm
             self.add_log(f"🌐 Truy cập: {url[:80]}")
@@ -280,6 +303,11 @@ class AmazonFetcher:
 
             self.add_log("✅ CF pass")
 
+            if AMAZON_POSTAL_CODE not in html:
+                self.add_log(f"⚠️ Postal code {AMAZON_POSTAL_CODE} không có trong HTML → retry")
+                return False, '', {}, {}, 'no_postcode'
+            self.add_log(f"📍 Đúng quốc gia ({AMAZON_POSTAL_CODE} có trong HTML)")
+
             if 'captcha' in page.url.lower() or 'captcha' in html.lower():
                 self.add_log("⚠️ Phát hiện CAPTCHA")
                 return False, '', {}, {}, 'captcha'
@@ -293,7 +321,7 @@ class AmazonFetcher:
         finally:
             await context.close()
 
-    async def fetch_url(self, url: str, max_retries: int = 3) -> AmazonProductResult:
+    async def fetch_url(self, url: str, max_retries: int = 5) -> AmazonProductResult:
         result = AmazonProductResult(url)
 
         for attempt_idx in range(max_retries):
@@ -320,6 +348,14 @@ class AmazonFetcher:
                     if status == 'blocked':
                         self.add_log("⚠️ Vẫn bị block → đổi proxy mới")
                         continue
+
+                if status == 'no_postal':
+                    self.add_log("🔄 Không tìm thấy postal code → reload + thử lại")
+                    continue
+
+                if status == 'no_postcode':
+                    self.add_log("🔄 Postal code vắng trong HTML → thử lại")
+                    continue
 
                 if status == 'captcha':
                     self.add_log("⚠️ CAPTCHA → đổi proxy")
