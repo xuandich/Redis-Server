@@ -722,12 +722,12 @@ def clear_failed():
 
 
 def _extract_domain_from_url(url: str) -> str:
-    """Extract domain from URL (fnac, amazon, newark, manomano, orchestra)"""
+    """Extract domain from URL (fnac, amazon_fr, newark, manomano, orchestra)"""
     from urllib.parse import urlparse
 
     SUPPORTED_DOMAINS = {
         'fnac': ['fnac.'],
-        'amazon': ['amazon.'],
+        'amazon_fr': ['amazon.fr'],
         'newark': ['newark.'],
         'manomano': ['manomano.'],
         'orchestra': ['orchestra.'],
@@ -800,7 +800,7 @@ def submit_job():
         supported_raw = redis_conn.get('system:supported_domains')
         if not supported_raw:
             return jsonify({'error': 'Orchestrator not started, no workers available'}), 503
-        supported = set(supported_raw.decode().split(','))
+        supported = set(supported_raw.split(','))
         if domain not in supported:
             return jsonify({'error': f'Domain "{domain}" not supported. Supported: {sorted(supported)}'}), 400
 
