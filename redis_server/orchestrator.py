@@ -299,6 +299,7 @@ def start_orchestrator():
     _wait_for_redis()
 
     domains = discover_worker_domains()
+    redis_client.set('system:supported_domains', ','.join(sorted(domains)))
 
     print("=" * 60)
     print("Orchestrator started")

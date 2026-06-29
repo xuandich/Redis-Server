@@ -1,7 +1,7 @@
 # BUG-16: submit-job accepts domain without worker, job stuck queued
 
 **Severity**: MEDIUM  
-**Status**: OPEN  
+**Status**: FIXED  
 **Date**: 2026-06-19
 
 ## Problem

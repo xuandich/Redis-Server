@@ -1,7 +1,7 @@
 # BUG-81: _extract_domain_from_url trích sai domain khi URL có subdomain hoặc port
 
 **Severity**: MEDIUM
-**Status**: OPEN
+**Status**: FIXED
 **Date**: 2026-06-28
 
 ## Problem

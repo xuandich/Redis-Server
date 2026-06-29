@@ -1,7 +1,7 @@
 # BUG-51: submit-job route theo prefix ret_key do client cung cấp thay vì URL — worker sai crawl site sai
 
 **Severity**: MEDIUM
-**Status**: OPEN
+**Status**: FIXED
 **Date**: 2026-06-23
 
 ## Problem

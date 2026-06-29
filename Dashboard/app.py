@@ -722,19 +722,33 @@ def clear_failed():
 
 
 def _extract_domain_from_url(url: str) -> str:
-    """Extract domain from URL (fnac, amazon, newark, etc.)"""
+    """Extract domain from URL (fnac, amazon, newark, manomano, orchestra)"""
     from urllib.parse import urlparse
+
+    SUPPORTED_DOMAINS = {
+        'fnac': ['fnac.'],
+        'amazon': ['amazon.'],
+        'newark': ['newark.'],
+        'manomano': ['manomano.'],
+        'orchestra': ['orchestra.'],
+    }
+
     try:
-        netloc = urlparse(url).netloc.lower()
-        if 'fnac' in netloc:
-            return 'fnac'
-        elif 'amazon' in netloc:
-            return 'amazon'
-        elif 'newark' in netloc:
-            return 'newark'
-        else:
-            return netloc.split('.')[-2] if netloc.count('.') >= 1 else netloc.split('.')[0]
-    except:
+        parsed = urlparse(url)
+        netloc = parsed.netloc.lower()
+        if ':' in netloc:
+            netloc = netloc.split(':')[0]
+
+        for domain, patterns in SUPPORTED_DOMAINS.items():
+            for pattern in patterns:
+                if pattern in netloc:
+                    return domain
+
+        parts = netloc.split('.')
+        if len(parts) >= 2:
+            return parts[-2]
+        return None
+    except Exception:
         return None
 
 
@@ -777,15 +791,18 @@ def submit_job():
         if not ret_key:
             return jsonify({'error': 'Missing required field: ret_key'}), 400
 
-        # Extract domain from ret_key (format: ret_{domain}_{uuid})
-        # Fallback to URL extraction if ret_key format doesn't match
-        parts = ret_key.split('_', 2)
-        if len(parts) >= 2 and parts[0] == 'ret':
-            domain = parts[1]
-        else:
-            domain = _extract_domain_from_url(url)
+        # BUG-51: luôn lấy domain từ URL, không parse từ ret_key
+        domain = _extract_domain_from_url(url)
         if not domain:
-            return jsonify({'error': 'Cannot determine domain from ret_key or URL'}), 400
+            return jsonify({'error': 'Cannot determine domain from URL'}), 400
+
+        # BUG-16: validate domain có worker hỗ trợ (đọc từ Redis, set bởi orchestrator khi start)
+        supported_raw = redis_conn.get('system:supported_domains')
+        if not supported_raw:
+            return jsonify({'error': 'Orchestrator not started, no workers available'}), 503
+        supported = set(supported_raw.decode().split(','))
+        if domain not in supported:
+            return jsonify({'error': f'Domain "{domain}" not supported. Supported: {sorted(supported)}'}), 400
 
         # Validate proxy_type
         valid_proxy_types = ['standard', 'none']
