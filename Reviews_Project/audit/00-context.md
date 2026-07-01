@@ -44,15 +44,17 @@ Hệ Redis + RQ (Redis Queue) crawler phân tán, chạy bằng Docker Compose. 
 | BUG-24 | 451c40f | read-back `setdefault` domain/url/timestamp vào success result |
 | BUG-20 | 7507614 | recovery re-enqueue job RQ-failed-no-result + cap retry_count>=3 |
 | BUG-49 | 7507614 | fnac: 403/429/503 + http_code==0/>=400 → failed |
+| BUG-81 | ceee225/641a10c | `_extract_domain_from_url` urlparse + strip port → FIX ĐÃ CÓ & ĐÚNG (cờ "MISSING" trong STATE 06-29 là lỗi thời; xác nhận lại 07-01) |
+| BUG-16/51 | ceee225 | dashboard route theo domain URL + validate `system:supported_domains` (orchestrator set) |
 
 ## 5. Quy ước
 
 - **Severity**: critical / high / medium / low / nit. Verdict thêm: refuted.
-- **Bug mới**: ID kế tiếp = (max trong `ls Bugs/`) + 1. Hiện cao nhất **BUG-98** → mới bắt đầu từ **BUG-99**.
+- **Bug mới**: ID kế tiếp = (max trong `ls Bugs/`) + 1. Hiện cao nhất **BUG-107** → mới bắt đầu từ **BUG-108**.
 - **Đánh dấu fixed**: đổi tên file `BUG-XX_...md` → `BUG-XX(FIXED)_...md` (git mv) + sửa field `**Status**: FIXED (ngày)` + thêm mục `## Fix Applied`.
 - **Result schema** (worker ghi): `{url, html, headers, http_code, cookies, elapsed_ms, error, status}` + (fnac) `ret_key, total_elapsed_seconds, mode, proxy_type, log`. Top-level `domain`/`timestamp` do orchestrator backfill (BUG-24).
 - **Dedup finding mới**: so với `ls Bugs/` — nếu trùng claim/file/cơ chế của BUG-XX đã có thì `is_new=false`.
 
 ## 6. Bảo trì file này
 
-Sau mỗi đợt fix: (a) thêm dòng vào §4, (b) cập nhật "ID cao nhất" ở §5, (c) nếu cơ chế cốt lõi đổi thì sửa §3. Lịch sử review: `Reviews_Project/2026-06-19`, `2026-06-23`, `2026-06-26`, `2026-06-27` (audit 2 worker mới manomano/orchestra → BUG-69..76), `2026-06-29` (re-audit P1+P6+P4+P5 coordinator budget-aware → BUG-82..98, 17 confirmed-new).
+Sau mỗi đợt fix: (a) thêm dòng vào §4, (b) cập nhật "ID cao nhất" ở §5, (c) nếu cơ chế cốt lõi đổi thì sửa §3. Lịch sử review: `Reviews_Project/2026-06-19`, `2026-06-23`, `2026-06-26`, `2026-06-27` (audit 2 worker mới manomano/orchestra → BUG-69..76), `2026-06-29` (re-audit P1+P6+P4+P5 coordinator budget-aware → BUG-82..98, 17 confirmed-new), `2026-07-01` (audit worker MỚI amazon_fr + Dashboard routing → BUG-99..107, 9 confirmed-new: 1 HIGH false-success + 3 MED + 5 LOW).
