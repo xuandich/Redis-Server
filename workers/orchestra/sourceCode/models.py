@@ -13,7 +13,6 @@ class HtmlFetchResult:
         self.cookies = {}
         self.elapsed_ms = 0
         self.error = None
-        self.proxy_used = None
         self.status = "pending"
 
     def to_dict(self) -> Dict:

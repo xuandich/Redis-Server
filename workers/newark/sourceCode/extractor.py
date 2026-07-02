@@ -68,18 +68,18 @@ class NewarkProductExtractor:
                     'password': None
                 }
         except Exception as e:
-            self._log(f"❌ Lỗi parse proxy: {e}")
+            self._log(f"❌ Error parsing proxy: {e}")
             return None
 
     async def start_browser_with_proxy(self, proxy_string: Optional[str] = None):
         if proxy_string:
             display_proxy = self.mask_proxy_password(proxy_string)
-            self._log(f"🚀 Khởi động browser với proxy: {display_proxy}")
+            self._log(f"🚀 Starting browser with proxy: {display_proxy}")
             proxy_config = self.parse_proxy(proxy_string)
             if not proxy_config:
                 return False
         else:
-            self._log(f"🚀 Khởi động browser không proxy...")
+            self._log(f"🚀 Starting browser without proxy...")
             proxy_config = None
 
         try:
@@ -116,15 +116,15 @@ class NewarkProductExtractor:
             )
 
             self.page = await self.context.new_page()
-            self._log(f"✅ Browser đã sẵn sàng")
+            self._log(f"✅ Browser is ready")
             return True
 
         except Exception as e:
-            self._log(f"❌ Lỗi khởi động browser: {e}")
+            self._log(f"❌ Error starting browser: {e}")
             return False
 
     async def restart_browser_with_new_proxy(self):
-        self._log(f"🔄 Restart browser với proxy mới")
+        self._log(f"🔄 Restarting browser with new proxy")
 
         self.current_proxy = self.get_next_proxy()
 
@@ -141,7 +141,7 @@ class NewarkProductExtractor:
                 await asyncio.sleep(5)
                 return True
             except Exception as e:
-                self._log(f"⚠️ Proxy mới cũng lỗi trang chủ: {e}")
+                self._log(f"⚠️ New proxy also failed on homepage: {e}")
                 return False
         return False
 
@@ -150,7 +150,7 @@ class NewarkProductExtractor:
             return None
 
         proxy = random.choice(self.proxies)
-        self._log(f"🔄 Chọn ngẫu nhiên proxy: {self.mask_proxy_password(proxy)}")
+        self._log(f"🔄 Randomly selected proxy: {self.mask_proxy_password(proxy)}")
         return proxy
 
     async def check_proxy_country(self):
@@ -166,9 +166,9 @@ class NewarkProductExtractor:
                 isp     = data.get('isp', '')
                 self._log(f"🌍 Proxy IP: {ip} | {country} - {city} | {isp}")
             else:
-                self._log(f"🌍 Không parse được country")
+                self._log(f"🌍 Could not parse country")
         except Exception as e:
-            self._log(f"⚠️ Không kiểm tra được proxy country: {e}")
+            self._log(f"⚠️ Could not check proxy country: {e}")
 
     async def _dismiss_popups(self):
         try:
@@ -207,7 +207,7 @@ class NewarkProductExtractor:
             await search_box.fill('')
             await asyncio.sleep(0.3)
 
-            self._log(f"  📝 Tìm kiếm: {keyword}")
+            self._log(f"  📝 Searching: {keyword}")
             await search_box.fill(keyword)
             await asyncio.sleep(0.5)
 
@@ -230,7 +230,7 @@ class NewarkProductExtractor:
             return False
 
         except Exception as e:
-            self._log(f"  ❌ Lỗi search: {e}")
+            self._log(f"  ❌ Search error: {e}")
             return False
 
     async def fetch_url_data(self, url: str, index: int, total: int) -> Dict:
@@ -259,20 +259,20 @@ class NewarkProductExtractor:
                         'error': 'No proxy available',
                     }
                     break
-                self._log(f"🔄 Retry {attempt}/{max_retries} — đổi proxy + restart browser...")
+                self._log(f"🔄 Retry {attempt}/{max_retries} — switching proxy + restarting browser...")
                 restarted = False
                 for _ in range(min(len(self.proxies) if self.proxies else 1, 5)):
                     restarted = await self.restart_browser_with_new_proxy()
                     if restarted:
                         break
-                    self._log(f"  ⚠️ Proxy bị block, thử proxy khác...")
+                    self._log(f"  ⚠️ Proxy blocked, trying another proxy...")
                 if not restarted:
-                    self._log(f"  ❌ Không thể vào trang chủ sau nhiều lần thử")
+                    self._log(f"  ❌ Could not reach homepage after multiple attempts")
                     break
 
             try:
                 if attempt == 1 and self.proxies and self.request_count_per_proxy >= self.requests_per_proxy:
-                    self._log(f"⚠️ Hết số requests, đổi proxy...")
+                    self._log(f"⚠️ Request quota exhausted, switching proxy...")
                     await self.restart_browser_with_new_proxy()
 
                 response_data = {'status': 0, 'headers': {}}
@@ -292,7 +292,7 @@ class NewarkProductExtractor:
                 self.page.remove_listener('response', handle_response)
 
                 if not found:
-                    self._log(f"  ❌ Lần {attempt}: không tìm thấy '{key}'")
+                    self._log(f"  ❌ Attempt {attempt}: '{key}' not found")
                     if attempt < max_retries:
                         continue
                     result = {
@@ -319,7 +319,7 @@ class NewarkProductExtractor:
                     break
 
             except Exception as e:
-                self._log(f"  ❌ Lần {attempt} exception: {e}")
+                self._log(f"  ❌ Attempt {attempt} exception: {e}")
                 if attempt < max_retries:
                     continue
                 result = {
@@ -362,34 +362,34 @@ class NewarkProductExtractor:
             browser_started = await self.start_browser_with_proxy(None)
 
         if not browser_started:
-            self._log(f"❌ Không thể khởi động browser, bỏ qua worker này")
+            self._log(f"❌ Could not start browser, skipping this worker")
             return []
 
-        self._log(f"✅ Browser sẵn sàng")
+        self._log(f"✅ Browser ready")
 
         await self.check_proxy_country()
 
         homepage_ok = False
         for _ in range(min(len(self.proxies) if self.proxies else 1, 5)):
             try:
-                self._log(f"🌐 Đang mở trang chủ...")
+                self._log(f"🌐 Opening homepage...")
                 await self.page.goto('https://www.newark.com/', timeout=30000)
                 await asyncio.sleep(8)
-                self._log(f"✅ Đã load trang chủ")
+                self._log(f"✅ Homepage loaded")
                 homepage_ok = True
                 break
             except Exception as e:
-                self._log(f"⚠️ Proxy bị block trang chủ: {e}")
+                self._log(f"⚠️ Proxy blocked on homepage: {e}")
                 if not self.proxies:
                     break
-                self._log(f"🔄 Thử proxy mới...")
+                self._log(f"🔄 Trying a new proxy...")
                 self.current_proxy = self.get_next_proxy()
                 await self.start_browser_with_proxy(self.current_proxy)
                 self.request_count_per_proxy = 0
                 await self.check_proxy_country()
 
         if not homepage_ok:
-            self._log(f"❌ Không thể vào trang chủ Newark sau nhiều lần thử")
+            self._log(f"❌ Could not reach Newark homepage after multiple attempts")
             return []
 
         for i, url in enumerate(urls, 1):
@@ -407,4 +407,4 @@ class NewarkProductExtractor:
             await self.browser.close()
         if self.playwright:
             await self.playwright.stop()
-        self._log(f"✅ Đã đóng browser")
+        self._log(f"✅ Browser closed")

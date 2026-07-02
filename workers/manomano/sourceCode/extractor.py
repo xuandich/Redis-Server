@@ -57,7 +57,7 @@ class ManomanoFetcher:
             flag = _country_flag(data.get('country_code', ''))
             self.add_log(f"🌍 IP: {ip} | {country} {flag}")
         except Exception as e:
-            self.add_log(f"🌍 IP check thất bại: {e}")
+            self.add_log(f"🌍 IP check failed: {e}")
 
     async def _start_browser(self, proxy_string: Optional[str] = None) -> bool:
         try:
@@ -93,18 +93,18 @@ class ManomanoFetcher:
                     launch_options['proxy'] = proxy_config
                     self.add_log(f"🌐 Proxy: {mask_proxy_password(proxy_string)}")
             else:
-                self.add_log("🌐 Direct connection (không proxy)")
+                self.add_log("🌐 Direct connection (no proxy)")
 
             self._browser = await self._playwright.chromium.launch(
                 executable_path=self.chromium_path,
                 **launch_options,
             )
-            self.add_log("✅ Browser khởi động thành công")
+            self.add_log("✅ Browser started successfully")
             await self._check_proxy_country()
             return True
 
         except Exception as e:
-            self.add_log(f"❌ Lỗi khởi động: {type(e).__name__}: {e}")
+            self.add_log(f"❌ Startup error: {type(e).__name__}: {e}")
             return False
 
     async def _human_move_and_click(self, page, tx: float, ty: float):
@@ -152,7 +152,7 @@ class ManomanoFetcher:
             self.add_log("🖱️ Clicked Turnstile")
             return True
         except Exception as e:
-            self.add_log(f"  ℹ️ Turnstile click thất bại: {e}")
+            self.add_log(f"  ℹ️ Turnstile click failed: {e}")
             return False
 
     _REFERERS = [
@@ -177,7 +177,7 @@ class ManomanoFetcher:
             available = self._REFERERS  # reset nếu đã dùng hết
         referer = random.choice(available)
         used_referers.add(referer)
-        self.add_log(f"🌐 Navigate với referer: {referer}")
+        self.add_log(f"🌐 Navigate with referer: {referer}")
         await page.goto(target_url, wait_until='domcontentloaded', timeout=30000,
                         referer=referer)
 
@@ -188,7 +188,7 @@ class ManomanoFetcher:
 
             # 1. Kiểm URL có chứa /p/ (trang sản phẩm manomano)
             if '/p/' not in current_url:
-                self.add_log(f"⚠️ URL không chứa /p/ → redirect khỏi trang sản phẩm: {current_url[:80]}")
+                self.add_log(f"⚠️ URL does not contain /p/ → redirected away from product page: {current_url[:80]}")
                 return False
 
             # 2. Kiểm tìm thấy nội dung sản phẩm (tên/giá)
@@ -197,14 +197,14 @@ class ManomanoFetcher:
                     'h1, .product-name, [data-testid="product-title"], .m-productName',
                     timeout=5000
                 )
-                self.add_log("✓ Tìm thấy tên sản phẩm")
+                self.add_log("✓ Product name found")
                 return True
             except Exception:
-                self.add_log("⚠️ Không tìm thấy tên/giá sản phẩm")
+                self.add_log("⚠️ Product name/price not found")
                 return False
 
         except Exception as e:
-            self.add_log(f"⚠️ Lỗi validate: {e}")
+            self.add_log(f"⚠️ Validation error: {e}")
             return False
 
     async def _navigate_and_get_html(self, url: str, used_referers: set) -> tuple:
@@ -257,7 +257,7 @@ class ManomanoFetcher:
             html  = await page.content()
 
             if _is_cf_blocked(title, html):
-                self.add_log("⏳ CF detected → thử tick Turnstile...")
+                self.add_log("⏳ CF detected → trying to click Turnstile...")
                 await self._try_click_turnstile(page)
                 await page.wait_for_timeout(6000)
 
@@ -265,7 +265,7 @@ class ManomanoFetcher:
                 html  = await page.content()
 
                 if _is_cf_blocked(title, html):
-                    self.add_log("⚠️ Vẫn bị CF sau khi tick → thử referer mới")
+                    self.add_log("⚠️ Still CF-blocked after click → trying a new referer")
                     return html, 'blocked', False, {}, {}
 
             # CF đã pass — chờ JS render
@@ -276,7 +276,7 @@ class ManomanoFetcher:
                     timeout=20000,
                 )
             except TimeoutError:
-                self.add_log("⚠️ Timeout render → trang không đủ nội dung")
+                self.add_log("⚠️ Render timeout → page does not have enough content")
                 html = await page.content()
                 return html, 'render_timeout', False, {}, {}
             except Exception:
@@ -302,12 +302,12 @@ class ManomanoFetcher:
 
         for attempt_idx in range(max_retries):
             proxy = random.choice(self.proxies) if self.proxies else None
-            label = mask_proxy_password(proxy) if proxy else "direct (không proxy)"
-            self.add_log(f"━ Lần {attempt_idx + 1}/{max_retries}: {label}")
+            label = mask_proxy_password(proxy) if proxy else "direct (no proxy)"
+            self.add_log(f"━ Attempt {attempt_idx + 1}/{max_retries}: {label}")
 
             ok = await self._start_browser(proxy)
             if not ok:
-                self.add_log("⚠️ Khởi động thất bại → thử proxy khác")
+                self.add_log("⚠️ Startup failed → trying another proxy")
                 continue
 
             try:
@@ -317,28 +317,27 @@ class ManomanoFetcher:
 
                 if status == 'blocked':
                     # Thử lại: browser mới + proxy hiện tại + referer mới (chưa dùng)
-                    self.add_log("🔄 CF block → browser mới + proxy hiện tại + referer mới...")
+                    self.add_log("🔄 CF block → new browser + same proxy + new referer...")
                     ok2 = await self._start_browser(proxy)
                     if ok2:
                         html, status, empty_page, cookies, headers = await self._navigate_and_get_html(url, used_referers)
                     if status == 'blocked':
-                        self.add_log("⚠️ Vẫn bị block → đổi proxy mới")
+                        self.add_log("⚠️ Still blocked → switching proxy")
                         continue
 
                 if status == 'render_timeout':
-                    self.add_log("⚠️ Render timeout → đổi proxy")
+                    self.add_log("⚠️ Render timeout → switching proxy")
                     continue
 
                 if status == 'invalid_content':
-                    self.add_log("⚠️ Không phải trang sản phẩm (redirect/404) → đổi proxy")
+                    self.add_log("⚠️ Not a product page (redirect/404) → switching proxy")
                     continue
 
                 if status != 'ok' or empty_page:
-                    self.add_log("⚠️ Trang trống (bị block) → đổi proxy")
+                    self.add_log("⚠️ Empty page (blocked) → switching proxy")
                     continue
 
                 elapsed_ms = (time.time() - start) * 1000
-                result.proxy_used = mask_proxy_password(proxy) if proxy else 'direct'
                 result.mark_success(html, headers, 200, cookies, elapsed_ms)
                 self.add_log(f"✅ {len(html):,} bytes | {elapsed_ms:.0f}ms")
                 return result
@@ -346,8 +345,7 @@ class ManomanoFetcher:
             except Exception as e:
                 self.add_log(f"❌ {type(e).__name__}: {str(e)[:100]}")
 
-        result.proxy_used = 'all_failed'
-        result.mark_failed("Thất bại: proxy bị block hoặc IP bị CF block")
+        result.mark_failed("Failed: proxy blocked or IP CF-blocked")
         return result
 
     async def close_browser(self):
@@ -364,4 +362,4 @@ class ManomanoFetcher:
                 pass
             self._playwright = None
         self._stop_display()
-        self.add_log("🔒 Browser đã đóng")
+        self.add_log("🔒 Browser closed")

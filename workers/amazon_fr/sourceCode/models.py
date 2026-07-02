@@ -10,11 +10,9 @@ class AmazonProductResult:
         self.html: str = ""
         self.headers: Dict = {}
         self.cookies: Dict = {}
-        self.country: Optional[str] = None
         self.http_code: int = 0
         self.elapsed_ms: float = 0
         self.error: Optional[str] = None
-        self.proxy_used: Optional[str] = None
         self.status: str = "pending"
 
     def to_dict(self) -> Dict:
@@ -22,12 +20,10 @@ class AmazonProductResult:
             'url': self.url,
             'html': self.html,
             'headers': self.headers,
-            'cookies': self.cookies,
-            'country': self.country,
             'http_code': self.http_code,
+            'cookies': self.cookies,
             'elapsed_ms': self.elapsed_ms,
             'error': self.error,
-            'proxy_used': self.proxy_used,
             'status': self.status,
         }
 

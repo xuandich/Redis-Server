@@ -13,9 +13,6 @@ class AmazonProductResult:
         self.http_code: int = 0
         self.elapsed_ms: float = 0
         self.error: Optional[str] = None
-        # proxy_used: theo dõi nội bộ cho log, KHÔNG xuất ra to_dict() — khớp quy ước
-        # fnac/manomano (proxy_used/proxy_country chỉ nội bộ, output là 8 field canonical).
-        self.proxy_used: Optional[str] = None
         self.status: str = "pending"
 
     def to_dict(self) -> Dict:

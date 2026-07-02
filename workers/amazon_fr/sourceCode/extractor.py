@@ -79,19 +79,19 @@ class AmazonFetcher:
                     launch_options['proxy'] = proxy_config
                     self.add_log(f"🌐 Proxy: {mask_proxy_password(proxy_string)}")
             else:
-                self.add_log("🌐 Direct connection (không proxy)")
+                self.add_log("🌐 Direct connection (no proxy)")
 
             self._browser = await self._playwright.chromium.launch(
                 executable_path=self.chromium_path,
                 **launch_options,
             )
-            self.add_log("✅ Browser khởi động thành công")
+            self.add_log("✅ Browser started successfully")
             if not await self._check_proxy_country():
                 return False
             return True
 
         except Exception as e:
-            self.add_log(f"❌ Lỗi khởi động: {type(e).__name__}: {e}")
+            self.add_log(f"❌ Startup error: {type(e).__name__}: {e}")
             return False
 
     async def _check_proxy_country(self) -> bool:
@@ -108,7 +108,7 @@ class AmazonFetcher:
             self.add_log(f"🌍 IP: {ip} | {country} {flag}")
             return True
         except Exception as e:
-            self.add_log(f"🌍 IP check thất bại → đổi proxy: {e}")
+            self.add_log(f"🌍 IP check failed → switching proxy: {e}")
             return False
 
     async def _inject_cookies(self, context, domain: str):
@@ -128,7 +128,7 @@ class AmazonFetcher:
                     pass
 
     async def _change_delivery_address(self, page) -> bool:
-        self.add_log(f"📍 Đổi địa chỉ → {AMAZON_POSTAL_CODE}")
+        self.add_log(f"📍 Changing delivery address → {AMAZON_POSTAL_CODE}")
         try:
             await page.wait_for_timeout(2000)
             for sel in ["#nav-global-location-popover-link", "#nav-packard-glow-locale"]:
@@ -140,7 +140,7 @@ class AmazonFetcher:
 
             zip_input = page.locator("#GLUXZipUpdateInput")
             if await zip_input.count() == 0:
-                self.add_log("⚠️ Không tìm thấy ô nhập postal code → sẽ retry")
+                self.add_log("⚠️ Postal code input not found → will retry")
                 return None
 
             await zip_input.fill(AMAZON_POSTAL_CODE)
@@ -154,7 +154,7 @@ class AmazonFetcher:
             return True
 
         except Exception as e:
-            self.add_log(f"⚠️ Lỗi đổi địa chỉ: {e}")
+            self.add_log(f"⚠️ Error changing delivery address: {e}")
             return False
 
     async def _human_move_and_click(self, page, tx: float, ty: float):
@@ -194,7 +194,7 @@ class AmazonFetcher:
             self.add_log("🖱️ Clicked Turnstile")
             return True
         except Exception as e:
-            self.add_log(f"  ℹ️ Turnstile click thất bại: {e}")
+            self.add_log(f"  ℹ️ Turnstile click failed: {e}")
             return False
 
     def _is_cf_blocked(self, title: str, html: str) -> bool:
@@ -265,16 +265,16 @@ class AmazonFetcher:
             try:
                 await page.reload(wait_until='domcontentloaded', timeout=30000)
             except Exception as e:
-                self.add_log(f"⚠️ Reload thất bại → stop + thử lại 1 lần: {e}")
+                self.add_log(f"⚠️ Reload failed → stop + retry once: {e}")
                 try:
                     await page.stop()
                 except Exception:
                     pass
                 try:
                     await page.reload(wait_until='domcontentloaded', timeout=30000)
-                    self.add_log("✅ Reload lần 2 thành công")
+                    self.add_log("✅ Second reload succeeded")
                 except Exception as e2:
-                    self.add_log(f"⚠️ Reload lần 2 vẫn thất bại (bỏ qua): {e2}")
+                    self.add_log(f"⚠️ Second reload still failed (ignoring): {e2}")
             await page.wait_for_timeout(random.uniform(2000, 3000))
 
             addr_ok = await self._change_delivery_address(page)
@@ -282,7 +282,7 @@ class AmazonFetcher:
                 return False, '', {}, {}, 'no_postal'
 
             # Truy cập trang sản phẩm
-            self.add_log(f"🌐 Truy cập: {url[:80]}")
+            self.add_log(f"🌐 Visiting: {url[:80]}")
             await page.goto(url, wait_until='domcontentloaded', timeout=45000)
             await page.wait_for_timeout(random.uniform(2000, 4000))
 
@@ -290,7 +290,7 @@ class AmazonFetcher:
             html = await page.content()
 
             if self._is_cf_blocked(title_text, html):
-                self.add_log("⏳ CF detected → thử tick Turnstile...")
+                self.add_log("⏳ CF detected → trying to click Turnstile...")
                 await self._try_click_turnstile(page)
                 await page.wait_for_timeout(6000)
 
@@ -298,18 +298,18 @@ class AmazonFetcher:
                 html = await page.content()
 
                 if self._is_cf_blocked(title_text, html):
-                    self.add_log("⚠️ Vẫn bị CF sau khi tick → đổi proxy mới")
+                    self.add_log("⚠️ Still CF-blocked after click → switching proxy")
                     return False, '', {}, {}, 'blocked'
 
             self.add_log("✅ CF pass")
 
             if AMAZON_POSTAL_CODE not in html:
-                self.add_log(f"⚠️ Postal code {AMAZON_POSTAL_CODE} không có trong HTML → retry")
+                self.add_log(f"⚠️ Postal code {AMAZON_POSTAL_CODE} not found in HTML → retry")
                 return False, '', {}, {}, 'no_postcode'
-            self.add_log(f"📍 Đúng quốc gia ({AMAZON_POSTAL_CODE} có trong HTML)")
+            self.add_log(f"📍 Correct country ({AMAZON_POSTAL_CODE} found in HTML)")
 
             if 'captcha' in page.url.lower() or 'captcha' in html.lower():
-                self.add_log("⚠️ Phát hiện CAPTCHA")
+                self.add_log("⚠️ CAPTCHA detected")
                 return False, '', {}, {}, 'captcha'
 
             is_product = await self._is_product_page(page)
@@ -326,12 +326,12 @@ class AmazonFetcher:
 
         for attempt_idx in range(max_retries):
             proxy = random.choice(self.proxies) if self.proxies else None
-            label = mask_proxy_password(proxy) if proxy else "direct (không proxy)"
-            self.add_log(f"━ Lần {attempt_idx + 1}/{max_retries}: {label}")
+            label = mask_proxy_password(proxy) if proxy else "direct (no proxy)"
+            self.add_log(f"━ Attempt {attempt_idx + 1}/{max_retries}: {label}")
 
             ok = await self._start_browser(proxy)
             if not ok:
-                self.add_log("⚠️ Khởi động thất bại → thử proxy khác")
+                self.add_log("⚠️ Startup failed → trying another proxy")
                 continue
 
             try:
@@ -340,40 +340,38 @@ class AmazonFetcher:
                 elapsed_ms = (time.time() - start) * 1000
 
                 if status == 'blocked':
-                    self.add_log("🔄 CF block → browser mới + proxy hiện tại + thử lại...")
+                    self.add_log("🔄 CF block → new browser + same proxy + retrying...")
                     ok2 = await self._start_browser(proxy)
                     if ok2:
                         is_product, html, headers, cookies, status = await self._navigate_and_extract(url)
                         elapsed_ms = (time.time() - start) * 1000
                     if status == 'blocked':
-                        self.add_log("⚠️ Vẫn bị block → đổi proxy mới")
+                        self.add_log("⚠️ Still blocked → switching proxy")
                         continue
 
                 if status == 'no_postal':
-                    self.add_log("🔄 Không tìm thấy postal code → reload + thử lại")
+                    self.add_log("🔄 Postal code not found → reload + retrying")
                     continue
 
                 if status == 'no_postcode':
-                    self.add_log("🔄 Postal code vắng trong HTML → thử lại")
+                    self.add_log("🔄 Postal code missing from HTML → retrying")
                     continue
 
                 if status == 'captcha':
-                    self.add_log("⚠️ CAPTCHA → đổi proxy")
+                    self.add_log("⚠️ CAPTCHA → switching proxy")
                     continue
 
                 if is_product:
-                    result.proxy_used = mask_proxy_password(proxy) if proxy else 'direct'
                     result.mark_success(html, headers, cookies, 200, elapsed_ms)
                     self.add_log(f"✅ {elapsed_ms:.0f}ms")
                     return result
 
-                self.add_log("⚠️ Không phải trang sản phẩm → thử lại")
+                self.add_log("⚠️ Not a product page → retrying")
 
             except Exception as e:
                 self.add_log(f"❌ {type(e).__name__}: {str(e)[:100]}")
 
-        result.proxy_used = 'all_failed'
-        result.mark_failed("Thất bại sau tất cả lần thử")
+        result.mark_failed("Failed after all attempts")
         return result
 
     async def close_browser(self):
@@ -390,4 +388,4 @@ class AmazonFetcher:
                 pass
             self._playwright = None
         self._stop_display()
-        self.add_log("🔒 Browser đã đóng")
+        self.add_log("🔒 Browser closed")

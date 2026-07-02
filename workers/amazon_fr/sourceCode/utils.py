@@ -1,4 +1,3 @@
-import re
 from pathlib import Path
 from typing import Optional, Dict
 
@@ -47,16 +46,6 @@ def parse_proxy(proxy_string: str) -> Optional[Dict]:
             }
     except Exception:
         return None
-
-
-def clean_amazon_url(url: str) -> str:
-    """Chuẩn hóa Amazon URL về dạng /dp/ASIN"""
-    for pattern in [r'/dp/([A-Z0-9]{10})', r'/product/([A-Z0-9]{10})', r'/gp/product/([A-Z0-9]{10})']:
-        match = re.search(pattern, url)
-        if match:
-            asin = match.group(1)
-            return f"https://{AMAZON_DOMAIN}/dp/{asin}"
-    return url
 
 
 def load_cookie_string() -> Optional[str]:

@@ -5,9 +5,8 @@ Request format: {"url": "...", "mode": "none", "proxy_type": "standard", "ret_ke
 Response format: như request + thêm html, headers, http_code, cookies, elapsed_ms, error, status, ...
 """
 
-import asyncio
 import time
-from typing import List, Dict, Any
+from typing import Dict, Any
 from asyncio import Semaphore
 
 from config import ensure_directories, load_proxies_from_excel
@@ -39,8 +38,6 @@ async def process_single_request(request: Dict[str, Any], semaphore: Semaphore) 
         fetcher = FnacHtmlFetcher(
             proxy_list=proxies,
             worker_id=hash(ret_key) % 1000,
-            semaphore=None,
-            display_manager=None
         )
 
         start_time = time.time()
@@ -73,14 +70,3 @@ async def process_single_request(request: Dict[str, Any], semaphore: Semaphore) 
             }
         finally:
             await fetcher.close_browser()
-
-
-async def process_request_list(requests: List[Dict[str, Any]], max_concurrent: int = 5) -> List[Dict[str, Any]]:
-    """
-    Xử lý một danh sách các request, chạy song song với giới hạn max_concurrent.
-    Trả về danh sách kết quả theo đúng thứ tự đầu vào.
-    """
-    semaphore = Semaphore(max_concurrent)
-    tasks = [process_single_request(req, semaphore) for req in requests]
-    results = await asyncio.gather(*tasks)
-    return results

@@ -20,10 +20,10 @@ def load_proxies_from_excel() -> List[str]:
     """Đọc proxy từ file Excel"""
     try:
         excel_path = os.path.join(PROXY_DIR, "buyproxies_List.xlsx")
-        print(f"\n📖 Đang đọc proxy từ file: {excel_path}")
-        
+        print(f"\n📖 Reading proxy from file: {excel_path}")
+
         if not os.path.exists(excel_path):
-            print(f"⚠️ Không tìm thấy file {excel_path}")
+            print(f"⚠️ File not found: {excel_path}")
             return []
         
         df = pd.read_excel(excel_path, header=None)
@@ -40,9 +40,9 @@ def load_proxies_from_excel() -> List[str]:
                 if pd.notna(proxy) and str(proxy).strip():
                     proxies.append(str(proxy).strip())
         
-        print(f"✅ Đã đọc {len(proxies)} proxies")
+        print(f"✅ Read {len(proxies)} proxies")
         return proxies
-        
+
     except Exception as e:
-        print(f"❌ Lỗi đọc proxy: {e}")
+        print(f"❌ Error reading proxy: {e}")
         return []
