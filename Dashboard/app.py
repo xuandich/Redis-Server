@@ -722,12 +722,13 @@ def clear_failed():
 
 
 def _extract_domain_from_url(url: str) -> str:
-    """Extract domain from URL (fnac, amazon_fr, newark, manomano, orchestra)"""
+    """Extract domain from URL (fnac, amazon_fr, amazon_uk, newark, manomano, orchestra)"""
     from urllib.parse import urlparse
 
     SUPPORTED_DOMAINS = {
         'fnac': ['fnac.'],
         'amazon_fr': ['amazon.fr'],
+        'amazon_uk': ['amazon.co.uk'],
         'newark': ['newark.'],
         'manomano': ['manomano.'],
         'orchestra': ['orchestra.'],
@@ -791,12 +792,11 @@ def submit_job():
         if not ret_key:
             return jsonify({'error': 'Missing required field: ret_key'}), 400
 
-        # BUG-51: luôn lấy domain từ URL, không parse từ ret_key
         domain = _extract_domain_from_url(url)
         if not domain:
             return jsonify({'error': 'Cannot determine domain from URL'}), 400
 
-        # BUG-16: validate domain có worker hỗ trợ (đọc từ Redis, set bởi orchestrator khi start)
+        # 'system:supported_domains' được orchestrator set lúc start (auto-discover từ workers/)
         supported_raw = redis_conn.get('system:supported_domains')
         if not supported_raw:
             return jsonify({'error': 'Orchestrator not started, no workers available'}), 503
@@ -815,9 +815,9 @@ def submit_job():
             queue_name = f'crawler:{domain}'
             queue = Queue(queue_name, connection=redis_conn)
 
-            # BUG-60: bảo toàn retry_count nếu job_state cũ còn tồn tại (re-submit cùng
-            # ret_key). Ghi đè vô điều kiện sẽ reset cap retry của crash-recovery về 0,
-            # khiến job luôn-lỗi bị re-enqueue vô hạn. Giống main.py:_set_job_state.
+            # Bảo toàn retry_count nếu job_state cũ còn tồn tại (re-submit cùng ret_key) —
+            # ghi đè vô điều kiện sẽ reset cap retry của crash-recovery về 0, khiến job
+            # luôn-lỗi bị re-enqueue vô hạn. Giống main.py:_set_job_state.
             retry_count = 0
             existing_state = redis_conn.get(f'job_state:{ret_key}')
             if existing_state:
